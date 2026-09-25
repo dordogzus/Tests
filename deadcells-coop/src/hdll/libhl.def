@@ -1,0 +1,18 @@
+LIBRARY libhl.dll
+EXPORTS
+hlt_i32 DATA
+hlt_f64 DATA
+hlt_dyn DATA
+hlt_bool DATA
+hl_hash_utf8
+hl_obj_has_field
+hl_dyn_geti
+hl_dyn_getd
+hl_dyn_getp
+hl_dyn_seti
+hl_dyn_setd
+hl_dyn_setp
+hl_dyn_call
+hl_make_dyn
+hl_add_root
+hl_remove_root
