@@ -1,31 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <AssemblyName>KingdomEightCrowns.AppearanceFlow</AssemblyName>
-    <GenerateAssemblyInfo>False</GenerateAssemblyInfo>
-    <TargetFramework>netstandard2.1</TargetFramework>
-  </PropertyGroup>
-  <PropertyGroup>
-    <LangVersion>12.0</LangVersion>
-    <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
-  </PropertyGroup>
-  <PropertyGroup>
-    <RootNamespace />
+    <RootNamespace>KingdomEightCrowns.AppearanceFlow</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <None Remove="kc8_scrollbar_track.png" />
-    <None Remove="kc8_scrollbar_thumb.png" />
+    <None Remove="kc8_scrollbar_track.png;kc8_scrollbar_thumb.png" />
     <EmbeddedResource Include="kc8_scrollbar_track.png" LogicalName="kc8_scrollbar_track.png" />
     <EmbeddedResource Include="kc8_scrollbar_thumb.png" LogicalName="kc8_scrollbar_thumb.png" />
-  </ItemGroup>
-  <ItemGroup>
-    <Reference Include="BepInEx.Core">
-      <HintPath>refs/BepInEx.Core.dll</HintPath>
-    </Reference>
-    <Reference Include="BepInEx.Unity.IL2CPP">
-      <HintPath>refs/BepInEx.Unity.IL2CPP.dll</HintPath>
-    </Reference>
-    <Reference Include="0Harmony">
-      <HintPath>refs/0Harmony.dll</HintPath>
-    </Reference>
   </ItemGroup>
 </Project>

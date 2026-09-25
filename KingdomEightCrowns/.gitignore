@@ -5,3 +5,5 @@ dist/
 *.user
 .vs/
 .hoplite/
+build/
+dist/

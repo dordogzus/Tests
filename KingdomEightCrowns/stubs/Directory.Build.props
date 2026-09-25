@@ -1,0 +1,14 @@
+<Project>
+  <!-- Compile-only reference stubs for the game's Il2CppInterop assemblies. They contain exactly the
+       types/members the core plugin binds to, with the same names and signatures as the assemblies
+       BepInEx generates in <game>/BepInEx/interop. They are never shipped. To build against the real
+       interop assemblies instead, pass -p:KingdomInteropDir=<game>/BepInEx/interop to the core build. -->
+  <Import Project="../src/Directory.Build.props" />
+  <PropertyGroup>
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+    <NoWarn>$(NoWarn);CS0660;CS0661;CS8981;CS0108;CS0114</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Il2CppInterop.Runtime" HintPath="$(NuGetPackageRoot)il2cppinterop.runtime/$(Il2CppInteropVersion)/lib/net6.0/Il2CppInterop.Runtime.dll" Private="false" />
+  </ItemGroup>
+</Project>

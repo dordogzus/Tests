@@ -12,4 +12,3 @@ using System.Security.Permissions;
 [assembly: AssemblyProduct("KingdomEightCrowns")]
 [assembly: AssemblyTitle("KingdomEightCrowns")]
 [assembly: AssemblyVersion("0.6.17.0")]
-[module: RefSafetyRules(11)]
