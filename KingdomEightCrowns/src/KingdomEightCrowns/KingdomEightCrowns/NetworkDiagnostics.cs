@@ -29,7 +29,6 @@ internal static class NetworkDiagnostics
 		PatchPrefix(harmony, AccessTools.Method(type, "Server_HandleOnDisconnect"), "BeforeServerDisconnect");
 		PatchPrefix(harmony, AccessTools.Method(type, "Client_HandleOnConnect"), "BeforeClientConnect");
 		PatchPrefix(harmony, AccessTools.Method(type, "Client_HandleOnDisconnect"), "BeforeClientDisconnect");
-		PatchPrefix(harmony, AccessTools.Method(type2, "PollAsHost"), "BeforeHostPoll");
 		PatchPostfix(harmony, AccessTools.Method(type4, "Update"), "AfterKingdomUpdate");
 		PatchPrefix(harmony, AccessTools.Method(type4, "OnLevelLoaded"), "BeforeKingdomLevelLoaded");
 		PatchPostfix(harmony, AccessTools.Method(type4, "OnDestroy"), "AfterKingdomDestroyed");
@@ -159,10 +158,6 @@ internal static class NetworkDiagnostics
 		}
 		Plugin.LogSource.LogInfo("[Single-PC probe] Intercepted the loopback client-disconnect callback; client gameplay state was intentionally left unchanged.");
 		return false;
-	}
-
-	private static void BeforeHostPoll()
-	{
 	}
 
 	private static void AfterKingdomUpdate(object __instance)

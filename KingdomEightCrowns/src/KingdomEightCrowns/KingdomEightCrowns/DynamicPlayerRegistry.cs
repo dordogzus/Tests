@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
 using BepInEx.Core.Logging.Interpolation;
@@ -44,15 +45,34 @@ public static class DynamicPlayerRegistry
 
 	private static readonly Dictionary<int, int> ReceivedInputCounts = new Dictionary<int, int>();
 
+	// Re-running a Player's model attach on a live body faults and corrupts it (see 0.14.17/0.14.18),
+	// so every body receives at most one re-apply, and only for a model delivered over the network.
+	private static readonly Dictionary<int, Player> ReappliedBodies = new Dictionary<int, Player>();
+
+	private static readonly HashSet<int> PendingAppearance = new HashSet<int>();
+
+	private static readonly Dictionary<int, long> BodyCreatedAt = new Dictionary<int, long>();
+
+	private const double AppearanceSettleSeconds = 0.5;
+
 	private static long _receivedDynamicRpcCount;
 
 	private static Kingdom? _kingdom;
 
+	// The game's own array that a published registry replaced, and the array this registry installed.
 	private static Il2CppReferenceArray<Player>? _originalActivePlayers;
+
+	private static Il2CppReferenceArray<Player>? _publishedActivePlayers;
+
+	private static string? _lastPublishedLayout;
 
 	private static Player? _nativePlayerTwo;
 
 	private static short _nativePlayerTwoNetId = -1;
+
+	private static int _nativePlayerTwoOriginalId = -1;
+
+	private static bool _nativePlayerTwoOriginalAuthority;
 
 	private static int _localOwnerId = -1;
 
@@ -61,6 +81,10 @@ public static class DynamicPlayerRegistry
 	private static bool _topologyLogged;
 
 	private static string? _lastReconcileFailure;
+
+	private static int _reconcileFailures;
+
+	private static long _nextReconcileAt;
 
 	[ThreadStatic]
 	private static bool _suppressCloneAutoRegistration;
@@ -84,6 +108,17 @@ public static class DynamicPlayerRegistry
 		harmony.Patch(original, new HarmonyMethod(AccessTools.Method(typeof(DynamicPlayerRegistry), "BeforeIsPlayerControllable")));
 		MethodInfo original2 = AccessTools.Method(typeof(NetworkBigBoss), "HandleRecvPoolDespawn", new Type[1] { typeof(PoolDespawn) }) ?? throw new MissingMethodException("NetworkBigBoss.HandleRecvPoolDespawn(PoolDespawn) was not generated.");
 		harmony.Patch(original2, new HarmonyMethod(AccessTools.Method(typeof(DynamicPlayerRegistry), "BeforePoolDespawn")), null, null, new HarmonyMethod(AccessTools.Method(typeof(DynamicPlayerRegistry), "AfterPoolDespawnFault")), null);
+		MethodInfo original5 = AccessTools.Method(typeof(Player), "SetupPlayerModel") ?? throw new MissingMethodException("Player.SetupPlayerModel() was not generated.");
+		harmony.Patch(original5, null, null, null, new HarmonyMethod(AccessTools.Method(typeof(DynamicPlayerRegistry), "AfterSetupPlayerModelFault")), null);
+		if (Plugin.HotPathTracingEnabled)
+		{
+			ApplyHotPathTracing(harmony);
+		}
+		ApplyResiliencePatches(harmony);
+	}
+
+	private static void ApplyHotPathTracing(Harmony harmony)
+	{
 		MethodInfo original3 = AccessTools.Method(typeof(NetworkPostbox), "CallCRPC", new Type[3]
 		{
 			typeof(CRPCType),
@@ -102,8 +137,11 @@ public static class DynamicPlayerRegistry
 		{
 			Plugin.LogSource.LogWarning("[Dynamic bodies] Player.SendInput was not generated; outbound input instrumentation is unavailable.");
 		}
-		MethodInfo original5 = AccessTools.Method(typeof(Player), "SetupPlayerModel") ?? throw new MissingMethodException("Player.SetupPlayerModel() was not generated.");
-		harmony.Patch(original5, null, null, null, new HarmonyMethod(AccessTools.Method(typeof(DynamicPlayerRegistry), "AfterSetupPlayerModelFault")), null);
+		Plugin.LogSource.LogWarning("[Dynamic bodies] Hot-path CRPC/input tracing is enabled ([Diagnostics] HotPathTracing).");
+	}
+
+	private static void ApplyResiliencePatches(Harmony harmony)
+	{
 		try
 		{
 			MethodInfo methodInfo4 = AccessTools.Method(typeof(Payable), "AddCurrencyIndicators", new Type[1] { typeof(Player) });
@@ -375,6 +413,12 @@ public static class DynamicPlayerRegistry
 			}
 			Bodies.Remove(playerId);
 			RemoveLogicalMappings(playerId);
+			// A freed slot is reused by the next joiner, who must not inherit this player's ruler or fault mark.
+			BodyCreatedAt.Remove(playerId);
+			ReappliedBodies.Remove(playerId);
+			PendingAppearance.Remove(playerId);
+			LoggedPlayerModelFaults.Remove(playerId);
+			PlayerAppearanceRegistry.ClearSlot(playerId);
 			_dirty = true;
 		}
 		TryReconcile();
@@ -382,17 +426,37 @@ public static class DynamicPlayerRegistry
 
 	public static void TryReapplyAppearance(int playerId)
 	{
-		if (playerId < 1)
+		if (playerId < 1 || playerId >= 8)
 		{
 			return;
 		}
 		Player value;
 		lock (Gate)
 		{
-			if (LoggedPlayerModelFaults.Contains(playerId) || !Bodies.TryGetValue(playerId, out value) || value == null)
+			if (LoggedPlayerModelFaults.Contains(playerId))
 			{
+				PendingAppearance.Remove(playerId);
 				return;
 			}
+			if (!Bodies.TryGetValue(playerId, out value) || value == null || !IsBodySettled(playerId))
+			{
+				// The body is created (or finishes its first frames) later; Tick applies the stored ruler then.
+				PendingAppearance.Add(playerId);
+				return;
+			}
+			if (value == _nativePlayerTwo || (ReappliedBodies.TryGetValue(playerId, out Player applied) && applied == value))
+			{
+				// The natively bound body is dressed by the stock path; a clone is only ever re-applied once.
+				PendingAppearance.Remove(playerId);
+				return;
+			}
+			if (!PlayerAppearanceRegistry.IsCommitted(playerId))
+			{
+				PendingAppearance.Add(playerId);
+				return;
+			}
+			PendingAppearance.Remove(playerId);
+			ReappliedBodies[playerId] = value;
 		}
 		try
 		{
@@ -407,7 +471,44 @@ public static class DynamicPlayerRegistry
 			Plugin.LogSource.LogWarning($"[Dynamic bodies] Re-applying Player {playerId + 1}'s stored " + "appearance faulted (" + ex.GetType().Name + "); keeping the current look and never retrying.");
 			return;
 		}
+		bool faulted;
+		lock (Gate)
+		{
+			faulted = LoggedPlayerModelFaults.Contains(playerId);
+		}
+		if (faulted)
+		{
+			// AfterSetupPlayerModelFault swallowed the native fault; report it instead of claiming success.
+			Plugin.LogSource.LogWarning($"[Dynamic bodies] Re-applying Player {playerId + 1}'s stored appearance faulted inside the game's model setup; keeping the current look and never retrying.");
+			return;
+		}
 		Plugin.LogSource.LogWarning($"[Dynamic bodies] Re-applied Player {playerId + 1}'s stored " + "appearance to its body.");
+	}
+
+	private static bool IsBodySettled(int playerId)
+	{
+		if (!BodyCreatedAt.TryGetValue(playerId, out long createdAt))
+		{
+			return true;
+		}
+		return (double)(Stopwatch.GetTimestamp() - createdAt) / (double)Stopwatch.Frequency >= AppearanceSettleSeconds;
+	}
+
+	private static void ProcessPendingAppearance()
+	{
+		int[] pending;
+		lock (Gate)
+		{
+			if (PendingAppearance.Count == 0)
+			{
+				return;
+			}
+			pending = PendingAppearance.Where((int id) => Bodies.TryGetValue(id, out Player body) && body != null && IsBodySettled(id) && PlayerAppearanceRegistry.IsCommitted(id)).ToArray();
+		}
+		foreach (int playerId in pending)
+		{
+			TryReapplyAppearance(playerId);
+		}
 	}
 
 	public static int ResolveLogicalPlayerId(Player player)
@@ -441,17 +542,83 @@ public static class DynamicPlayerRegistry
 		{
 			return;
 		}
+		bool reconcileDue;
 		lock (Gate)
 		{
 			if (_kingdom != kingdom)
 			{
 				ResetRuntimeBodies("new kingdom instance");
 				_kingdom = kingdom;
-				_originalActivePlayers = kingdom._activePlayers;
+				_originalActivePlayers = null;
+				_publishedActivePlayers = null;
 				_dirty = true;
+				_nextReconcileAt = 0L;
 			}
+			PruneDestroyedBodies();
+			reconcileDue = Stopwatch.GetTimestamp() >= _nextReconcileAt;
 		}
-		TryReconcile();
+		if (reconcileDue)
+		{
+			TryReconcile();
+		}
+		ProcessPendingAppearance();
+	}
+
+	// Clones parented under the level hierarchy can be destroyed by the game (level unload) without passing
+	// through DeregisterClone; drop them and their dead NetID registration so they are rebuilt.
+	private static void PruneDestroyedBodies()
+	{
+		if (Bodies.Count == 0)
+		{
+			return;
+		}
+		if ((object)_nativePlayerTwo != null && _nativePlayerTwo == null)
+		{
+			ResetRuntimeBodies("the native Player 2 body was destroyed");
+			_dirty = DesiredNetIds.Count > 0;
+			return;
+		}
+		int[] dead = Bodies.Where((KeyValuePair<int, Player> pair) => (object)pair.Value != null && pair.Value == null).Select((KeyValuePair<int, Player> pair) => pair.Key).ToArray();
+		if (dead.Length == 0)
+		{
+			return;
+		}
+		foreach (int id in dead)
+		{
+			if (DesiredNetIds.TryGetValue(id, out short netId))
+			{
+				RemoveDeadRegistration(NetworkPostbox.Instance, netId);
+			}
+			Bodies.Remove(id);
+			RemoveLogicalMappings(id);
+			BodyCreatedAt.Remove(id);
+			ReappliedBodies.Remove(id);
+		}
+		CloneObjects.RemoveWhere((GameObject go) => go == null);
+		_dirty = true;
+		Plugin.LogSource.LogWarning("[Dynamic bodies] " + dead.Length + " remote body/bodies were destroyed by the game (level change); they will be rebuilt.");
+	}
+
+	private static bool RemoveDeadRegistration(NetworkPostbox? postbox, short netId)
+	{
+		try
+		{
+			CRPCHeader header = null;
+			if (postbox?.DynamicObjects == null || !postbox.DynamicObjects.TryGetValue(netId, ref header))
+			{
+				return false;
+			}
+			if (header != null && header.referencedGO != null)
+			{
+				return false;
+			}
+			postbox.DynamicObjects.Remove(netId);
+			return true;
+		}
+		catch
+		{
+			return false;
+		}
 	}
 
 	public static void ResetSession(string reason)
@@ -475,8 +642,13 @@ public static class DynamicPlayerRegistry
 			LoggedUnroutedDynamicIds.Clear();
 			LoggedSendInputBodies.Clear();
 			ReceivedInputCounts.Clear();
+			PendingAppearance.Clear();
+			PlayerAppearanceRegistry.ResetSession();
 			_receivedDynamicRpcCount = 0L;
 			_dirty = false;
+			_reconcileFailures = 0;
+			_nextReconcileAt = 0L;
+			_lastReconcileFailure = null;
 		}
 	}
 
@@ -491,7 +663,9 @@ public static class DynamicPlayerRegistry
 			ResetRuntimeBodies(reason);
 			_kingdom = null;
 			_originalActivePlayers = null;
+			_publishedActivePlayers = null;
 			_dirty = DesiredNetIds.Count > 0;
+			_nextReconcileAt = 0L;
 		}
 	}
 
@@ -786,8 +960,18 @@ public static class DynamicPlayerRegistry
 	{
 		lock (Gate)
 		{
-			if (!_dirty || _kingdom == null || DesiredNetIds.Count == 0)
+			if (!_dirty || _kingdom == null)
 			{
+				return;
+			}
+			if (DesiredNetIds.Count == 0)
+			{
+				// Every remote player is gone: hand the stock Player 2 body and player list back to the game.
+				if (Bodies.Count > 0 || _publishedActivePlayers != null)
+				{
+					ResetRuntimeBodies("no remote players remain");
+				}
+				_dirty = false;
 				return;
 			}
 			if (_localOwnerId < 0)
@@ -818,20 +1002,39 @@ public static class DynamicPlayerRegistry
 				{
 					_nativePlayerTwo = playerTwo;
 					_nativePlayerTwoNetId = playerTwo.parentHeaderRef.NetID;
+					_nativePlayerTwoOriginalId = playerTwo.playerId;
+					_nativePlayerTwoOriginalAuthority = playerTwo.hasLocalAuthority;
 				}
 				int num = ((_localOwnerId == 0) ? 1 : _localOwnerId);
-				if (!DesiredNetIds.TryGetValue(num, out var value))
+				if (DesiredNetIds.TryGetValue(num, out var value))
 				{
+					RebindNativePlayerTwo(num, value, instance);
+				}
+				else if (_localOwnerId > 0)
+				{
+					// A client needs its own body mapping before it can place anyone else's.
 					return;
 				}
-				RebindNativePlayerTwo(num, value, instance);
+				// On the host an empty Player 2 slot (Player 2 left) must not freeze Players 3-8.
+				string creationFailure = null;
 				foreach (KeyValuePair<int, short> item in DesiredNetIds.OrderBy((KeyValuePair<int, short> pair) => pair.Key))
 				{
 					if (item.Key != num && ActivePlayerIds.Contains(item.Key) && (!Bodies.TryGetValue(item.Key, out Player value2) || value2 == null))
 					{
-						value2 = CreateRemoteBody(_nativePlayerTwo, item.Key, item.Value, instance);
-						Bodies[item.Key] = value2;
-						LogicalIds[value2] = item.Key;
+						try
+						{
+							value2 = CreateRemoteBody(_nativePlayerTwo, item.Key, item.Value, instance);
+							Bodies[item.Key] = value2;
+							LogicalIds[value2] = item.Key;
+							BodyCreatedAt[item.Key] = Stopwatch.GetTimestamp();
+							ReappliedBodies.Remove(item.Key);
+							PendingAppearance.Add(item.Key);
+						}
+						catch (Exception ex)
+						{
+							// One body that cannot be built must not block the others, removals, or publishing.
+							creationFailure = creationFailure ?? ("Player " + (item.Key + 1) + ": " + ex.GetType().Name + ": " + ex.Message);
+						}
 					}
 				}
 				int[] array = Bodies.Keys.Where((int id) => !DesiredNetIds.ContainsKey(id)).ToArray();
@@ -844,10 +1047,18 @@ public static class DynamicPlayerRegistry
 					}
 					Bodies.Remove(num3);
 					RemoveLogicalMappings(num3);
+					BodyCreatedAt.Remove(num3);
 				}
 				PublishActiveRegistry();
+				if (creationFailure != null)
+				{
+					RecordReconcileFailure(creationFailure);
+					return;
+				}
 				_dirty = false;
 				_lastReconcileFailure = null;
+				_reconcileFailures = 0;
+				_nextReconcileAt = 0L;
 				if (!_topologyLogged)
 				{
 					_topologyLogged = true;
@@ -856,14 +1067,22 @@ public static class DynamicPlayerRegistry
 			}
 			catch (Exception ex)
 			{
-				_dirty = true;
-				string text = ex.GetType().Name + ": " + ex.Message;
-				if (!string.Equals(_lastReconcileFailure, text, StringComparison.Ordinal))
-				{
-					_lastReconcileFailure = text;
-					Plugin.LogSource.LogError("[Dynamic bodies] Topology creation is not ready yet and will retry without blocking the game loop. Details: " + text);
-				}
+				RecordReconcileFailure(ex.GetType().Name + ": " + ex.Message);
 			}
+		}
+	}
+
+	private static void RecordReconcileFailure(string text)
+	{
+		_dirty = true;
+		_reconcileFailures++;
+		// Back off (0.25 s doubling to 5 s) instead of re-cloning a full Player every frame.
+		double delay = Math.Min(5.0, 0.25 * Math.Pow(2.0, Math.Min(_reconcileFailures - 1, 5)));
+		_nextReconcileAt = Stopwatch.GetTimestamp() + (long)(delay * (double)Stopwatch.Frequency);
+		if (!string.Equals(_lastReconcileFailure, text, StringComparison.Ordinal))
+		{
+			_lastReconcileFailure = text;
+			Plugin.LogSource.LogError($"[Dynamic bodies] Topology creation is not ready yet and will retry in {delay:0.##} s without blocking the game loop. Details: " + text);
 		}
 	}
 
@@ -882,6 +1101,7 @@ public static class DynamicPlayerRegistry
 		}
 		if (netID != targetNetId)
 		{
+			RemoveDeadRegistration(postbox, targetNetId);
 			if (postbox.DynamicObjects.ContainsKey(targetNetId) && postbox.DynamicObjects[targetNetId] != parentHeaderRef)
 			{
 				throw new InvalidOperationException($"Cannot bind local body to NetID {targetNetId}; it is already occupied.");
@@ -905,6 +1125,10 @@ public static class DynamicPlayerRegistry
 
 	private static Player CreateRemoteBody(Player source, int logicalId, short netId, NetworkPostbox postbox)
 	{
+		if (RemoveDeadRegistration(postbox, netId))
+		{
+			Plugin.LogSource.LogWarning($"[Dynamic bodies] Reclaimed NetID {netId} from a destroyed body before rebuilding logical Player {logicalId + 1}.");
+		}
 		if (postbox.DynamicObjects.ContainsKey(netId))
 		{
 			throw new InvalidOperationException($"Cannot create logical Player {logicalId + 1}; NetID {netId} is occupied.");
@@ -1102,48 +1326,101 @@ public static class DynamicPlayerRegistry
 		{
 			return;
 		}
-		int num = _originalActivePlayers?.Length ?? 0;
-		int num2 = 0;
-		Player value;
-		for (int i = 1; i < 8 && Bodies.TryGetValue(i, out value); i++)
+		Il2CppReferenceArray<Player>? current = _kingdom._activePlayers;
+		if (_publishedActivePlayers == null || !SameArray(current, _publishedActivePlayers))
 		{
-			if (value == null)
-			{
-				break;
-			}
-			if (!(value == _nativePlayerTwo) && !ActivePlayerIds.Contains(i))
-			{
-				break;
-			}
-			num2 = i + 1;
+			// Whatever the game holds now (initially, or after it replaced our array) is the stock baseline.
+			_originalActivePlayers = current;
+			_publishedActivePlayers = null;
 		}
-		if (num2 <= Math.Max(2, num))
+		Il2CppReferenceArray<Player>? stock = _originalActivePlayers;
+		// Slot 0 (the host's body) stays the game's own entry; every live logical player follows in ID order
+		// without gaps, so a departure below Players 3-8 no longer drops them from the player list.
+		List<Player> published = new List<Player>(8);
+		if (stock != null && stock.Length > 0 && stock[0] != null)
 		{
-			if (_originalActivePlayers != null && _kingdom._activePlayers != _originalActivePlayers)
+			published.Add(stock[0]);
+		}
+		bool anyClone = false;
+		foreach (KeyValuePair<int, Player> body in Bodies.OrderBy((KeyValuePair<int, Player> pair) => pair.Key))
+		{
+			if (body.Key >= 1 && body.Value != null && (body.Value == _nativePlayerTwo || ActivePlayerIds.Contains(body.Key)))
 			{
-				_kingdom._activePlayers = _originalActivePlayers;
+				published.Add(body.Value);
+				anyClone |= body.Value != _nativePlayerTwo;
 			}
+		}
+		if (stock == null || !anyClone || MatchesArray(published, stock))
+		{
+			// No clone is live (plain two-player layout): leave the game's array untouched.
+			if (_publishedActivePlayers != null && stock != null)
+			{
+				_kingdom._activePlayers = stock;
+			}
+			_publishedActivePlayers = null;
 			return;
 		}
-		int num3 = Math.Max(2, Math.Max(num, num2));
-		Il2CppReferenceArray<Player> il2CppReferenceArray = new Il2CppReferenceArray<Player>(num3);
-		if (_originalActivePlayers != null)
+		Il2CppReferenceArray<Player> il2CppReferenceArray = new Il2CppReferenceArray<Player>(published.Count);
+		for (int i = 0; i < published.Count; i++)
 		{
-			int num4 = Math.Min(_originalActivePlayers.Length, num3);
-			for (int j = 0; j < num4; j++)
-			{
-				il2CppReferenceArray[j] = _originalActivePlayers[j];
-			}
-		}
-		foreach (KeyValuePair<int, Player> body in Bodies)
-		{
-			if (body.Key >= 0 && body.Key < num3 && body.Value != null && (body.Value == _nativePlayerTwo || ActivePlayerIds.Contains(body.Key)))
-			{
-				il2CppReferenceArray[body.Key] = body.Value;
-			}
+			il2CppReferenceArray[i] = published[i];
 		}
 		_kingdom._activePlayers = il2CppReferenceArray;
-		Plugin.LogSource.LogWarning($"[Dynamic bodies] Published a contiguous {num3}-slot active-player " + "registry with no empty padding entries.");
+		_publishedActivePlayers = _kingdom._activePlayers;
+		string layout = string.Join(",", Bodies.Where((KeyValuePair<int, Player> pair) => pair.Key >= 1 && pair.Value != null && (pair.Value == _nativePlayerTwo || ActivePlayerIds.Contains(pair.Key))).Select((KeyValuePair<int, Player> pair) => pair.Key + 1).OrderBy((int id) => id));
+		if (!string.Equals(_lastPublishedLayout, layout, StringComparison.Ordinal))
+		{
+			_lastPublishedLayout = layout;
+			Plugin.LogSource.LogWarning($"[Dynamic bodies] Published a {published.Count}-entry active-player registry (host + Players {layout}).");
+		}
+	}
+
+	internal static bool TryResolvePublishedPlayer(Kingdom kingdom, int playerId, out Player? player)
+	{
+		player = null;
+		lock (Gate)
+		{
+			if (_kingdom == null || kingdom == null || _kingdom != kingdom || playerId < 1 || Bodies.Count == 0)
+			{
+				return false;
+			}
+			bool published = _publishedActivePlayers != null && SameArray(kingdom._activePlayers, _publishedActivePlayers);
+			if (!published && playerId < 2)
+			{
+				// Stock layout: Player 2 keeps the game's own lookup.
+				return false;
+			}
+			if (Bodies.TryGetValue(playerId, out Player body) && body != null && (body == _nativePlayerTwo || ActivePlayerIds.Contains(playerId)))
+			{
+				player = body;
+			}
+			return true;
+		}
+	}
+
+	private static bool SameArray(Il2CppReferenceArray<Player>? left, Il2CppReferenceArray<Player>? right)
+	{
+		if (left == null || right == null)
+		{
+			return left == null && right == null;
+		}
+		return left.Pointer == right.Pointer;
+	}
+
+	private static bool MatchesArray(List<Player> players, Il2CppReferenceArray<Player>? array)
+	{
+		if (array == null || array.Length != players.Count)
+		{
+			return false;
+		}
+		for (int i = 0; i < players.Count; i++)
+		{
+			if (array[i] != players[i])
+			{
+				return false;
+			}
+		}
+		return true;
 	}
 
 	private static void DeregisterClone(Player body)
@@ -1175,10 +1452,18 @@ public static class DynamicPlayerRegistry
 			logSource.LogWarning(bepInExWarningLogInterpolatedStringHandler);
 		}
 		LogicalIds.Remove(body);
-		CloneObjects.Remove(body.gameObject);
-		if (body.gameObject != null)
+		GameObject? cloneObject = null;
+		try
 		{
-			UnityEngine.Object.Destroy(body.gameObject);
+			cloneObject = body.gameObject;
+		}
+		catch
+		{
+		}
+		if (cloneObject != null)
+		{
+			CloneObjects.Remove(cloneObject);
+			UnityEngine.Object.Destroy(cloneObject);
 		}
 	}
 
@@ -1209,33 +1494,51 @@ public static class DynamicPlayerRegistry
 			{
 				NetworkPostbox instance = NetworkPostbox.Instance;
 				CRPCHeader parentHeaderRef = _nativePlayerTwo.parentHeaderRef;
-				instance?.DynamicObjects?.Remove(parentHeaderRef.NetID);
-				parentHeaderRef.ReceiveNetIDOverride(_nativePlayerTwoNetId);
-				if (instance?.DynamicObjects != null)
+				// Only undo a rebind that actually happened; a plain two-player session keeps the stock registration.
+				if (parentHeaderRef.NetID != _nativePlayerTwoNetId)
 				{
-					instance.DynamicObjects[_nativePlayerTwoNetId] = parentHeaderRef;
+					instance?.DynamicObjects?.Remove(parentHeaderRef.NetID);
+					parentHeaderRef.ReceiveNetIDOverride(_nativePlayerTwoNetId);
+					if (instance?.DynamicObjects != null)
+					{
+						instance.DynamicObjects[_nativePlayerTwoNetId] = parentHeaderRef;
+					}
+					CRPCStamp component = _nativePlayerTwo.gameObject.GetComponent<CRPCStamp>();
+					if (component != null)
+					{
+						component.semiStatic = false;
+						component.Setup(parentHeaderRef, semiStatic: false);
+					}
 				}
-				CRPCStamp component = _nativePlayerTwo.gameObject.GetComponent<CRPCStamp>();
-				if (component != null)
+				if (_nativePlayerTwoOriginalId >= 0 && _nativePlayerTwo.playerId != _nativePlayerTwoOriginalId)
 				{
-					component.semiStatic = false;
-					component.Setup(parentHeaderRef, semiStatic: false);
+					_nativePlayerTwo.playerId = _nativePlayerTwoOriginalId;
+				}
+				if (_nativePlayerTwoOriginalId >= 0 && _nativePlayerTwo.hasLocalAuthority != _nativePlayerTwoOriginalAuthority)
+				{
+					_nativePlayerTwo.hasLocalAuthority = _nativePlayerTwoOriginalAuthority;
 				}
 			}
 			catch
 			{
 			}
 		}
-		if (_kingdom != null && _originalActivePlayers != null)
+		if (_kingdom != null && _originalActivePlayers != null && _publishedActivePlayers != null)
 		{
 			try
 			{
-				_kingdom._activePlayers = _originalActivePlayers;
+				// Restore the game's array only while ours is still installed; a newer native array wins.
+				if (SameArray(_kingdom._activePlayers, _publishedActivePlayers))
+				{
+					_kingdom._activePlayers = _originalActivePlayers;
+				}
 			}
 			catch
 			{
 			}
 		}
+		_publishedActivePlayers = null;
+		_lastPublishedLayout = null;
 		if (CloneObjects.Count > 0)
 		{
 			ManualLogSource logSource = Plugin.LogSource;
@@ -1254,8 +1557,11 @@ public static class DynamicPlayerRegistry
 		CloneObjects.Clear();
 		Bodies.Clear();
 		LogicalIds.Clear();
+		BodyCreatedAt.Clear();
+		ReappliedBodies.Clear();
 		_nativePlayerTwo = null;
 		_nativePlayerTwoNetId = -1;
+		_nativePlayerTwoOriginalId = -1;
 		_topologyLogged = false;
 	}
 }

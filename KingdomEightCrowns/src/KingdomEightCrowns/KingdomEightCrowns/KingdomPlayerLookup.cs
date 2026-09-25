@@ -14,6 +14,12 @@ internal static class KingdomPlayerLookup
 
 	private static bool BeforeGetPlayer(Kingdom __instance, int playerId, ref Player __result)
 	{
+		// Resolve by logical ID through the registry: the published list is gap-free, so its index is not the ID.
+		if (DynamicPlayerRegistry.TryResolvePublishedPlayer(__instance, playerId, out Player resolved))
+		{
+			__result = resolved;
+			return false;
+		}
 		Il2CppReferenceArray<Player> activePlayers = __instance._activePlayers;
 		if (activePlayers == null || activePlayers.Length <= 2)
 		{
@@ -24,7 +30,8 @@ internal static class KingdomPlayerLookup
 			__result = null;
 			return false;
 		}
-		__result = activePlayers[playerId];
+		Player player = activePlayers[playerId];
+		__result = (player != null) ? player : null;
 		return false;
 	}
 }

@@ -11,7 +11,7 @@ using UnityEngine;
 
 namespace KingdomEightCrowns;
 
-[BepInPlugin("openai.kingdomtwocrowns.eightcrowns", "Kingdom Eight Crowns", "0.6.22-alpha")]
+[BepInPlugin("openai.kingdomtwocrowns.eightcrowns", "Kingdom Eight Crowns", "0.6.23-alpha")]
 [BepInProcess("KingdomTwoCrowns.exe")]
 public sealed class Plugin : BasePlugin
 {
@@ -19,7 +19,7 @@ public sealed class Plugin : BasePlugin
 
 	public const string PluginName = "Kingdom Eight Crowns";
 
-	public const string PluginVersion = "0.6.22-alpha";
+	public const string PluginVersion = "0.6.23-alpha";
 
 	public const string SupportedGameVersion = "2.1.4";
 
@@ -35,11 +35,14 @@ public sealed class Plugin : BasePlugin
 
 	internal static bool DiagnosticsEnabled { get; private set; } = true;
 
-	internal static bool SinglePcProbeEnabled { get; private set; } = true;
+	// Per-RPC / per-input tracing. Off by default: it runs on every CRPC the game dispatches.
+	internal static bool HotPathTracingEnabled { get; private set; }
+
+	internal static bool SinglePcProbeEnabled { get; private set; }
 
 	internal static int SimulatedClients { get; private set; } = 7;
 
-	internal static bool PlayerBodyProbeEnabled { get; private set; } = true;
+	internal static bool PlayerBodyProbeEnabled { get; private set; }
 
 	internal static int ProbePlayerCount { get; private set; } = 8;
 
@@ -50,19 +53,21 @@ public sealed class Plugin : BasePlugin
 		LogSource = base.Log;
 		ConfigEntry<int> configEntry = base.Config.Bind("Multiplayer", "MaxPlayers", 8, "Maximum session capacity, including the host. Sessions may use any lower count. Valid range: 2-8.");
 		ConfigEntry<bool> configEntry2 = base.Config.Bind("Diagnostics", "Enabled", defaultValue: true, "Log the original network router's connection and disconnection callbacks.");
-		ConfigEntry<bool> configEntry3 = base.Config.Bind("SinglePcProbe", "Enabled", defaultValue: true, "When hosting, automatically connect temporary loopback clients and log the result.");
+		ConfigEntry<bool> configEntry8 = base.Config.Bind("Diagnostics", "HotPathTracing", defaultValue: false, "Trace every CRPC dispatch and player input (first-use lines and volume samples). Costs frame time with many players; enable only when collecting logs for a bug report.");
+		ConfigEntry<bool> configEntry3 = base.Config.Bind("SinglePcProbe", "Enabled", defaultValue: false, "Developer diagnostic. Keep false for real sessions.");
 		ConfigEntry<bool> configEntry4 = base.Config.Bind("DynamicBodyHooks", "Enabled", defaultValue: true, "Keep false to silence the experimental Payable.Select and RegisterObject hooks for ESC-crash isolation; native 8-player patches stay active.");
 		ConfigEntry<int> configEntry5 = base.Config.Bind("SinglePcProbe", "SimulatedClients", 7, "Number of temporary loopback clients. Valid range: 2-7.");
-		ConfigEntry<bool> configEntry6 = base.Config.Bind("PlayerBodyProbe", "Enabled", defaultValue: true, "In a campaign, temporarily create and register additional visible player-body clones.");
+		ConfigEntry<bool> configEntry6 = base.Config.Bind("PlayerBodyProbe", "Enabled", defaultValue: false, "Developer diagnostic that swaps in fake player bodies for 15 seconds. Keep false for real sessions.");
 		ConfigEntry<int> configEntry7 = base.Config.Bind("PlayerBodyProbe", "PlayerCount", 8, "Temporary occupied-slot count for the body probe. Valid range: 2-MaxPlayers.");
 		MaxPlayers = Math.Clamp(configEntry.Value, 2, 8);
 		DiagnosticsEnabled = configEntry2.Value;
+		HotPathTracingEnabled = configEntry8.Value;
 		SinglePcProbeEnabled = configEntry3.Value;
 		DynamicBodyHooksEnabled = configEntry4.Value;
 		SimulatedClients = Math.Clamp(configEntry5.Value, 2, 7);
 		PlayerBodyProbeEnabled = configEntry6.Value;
 		ProbePlayerCount = Math.Clamp(configEntry7.Value, 2, MaxPlayers);
-		LogSource.LogInfo("Kingdom Eight Crowns 0.6.22-alpha loading.");
+		LogSource.LogInfo("Kingdom Eight Crowns " + PluginVersion + " loading.");
 		LogSource.LogInfo("Detected game version: " + Application.version);
 		if (!VerifyBuild())
 		{
@@ -77,7 +82,11 @@ public sealed class Plugin : BasePlugin
 			PlayerAppearanceLookup.Apply(_harmony);
 			KingdomPlayerLookup.Apply(_harmony);
 			NetworkDiagnostics.Apply(_harmony);
-			LogSource.LogWarning($"Player-body registry probe active with {ProbePlayerCount} temporary occupied slot(s) and a maximum capacity of {MaxPlayers}. Additional bodies are visual clones, receive " + "independent eight-slot PlayerModel appearances, use remote authority, and are verified through the expanded player and appearance lookups. They are removed automatically. The final session will only create slots for players who actually join.");
+			LogSource.LogInfo($"Eight-player core ready: maximum capacity {MaxPlayers}, hot-path tracing {(HotPathTracingEnabled ? "on" : "off")}.");
+			if (PlayerBodyProbeEnabled)
+			{
+				LogSource.LogWarning($"[Player-body probe] Developer probe enabled with {ProbePlayerCount} temporary slot(s); disable [PlayerBodyProbe] Enabled for real sessions.");
+			}
 		}
 		catch (Exception arg)
 		{

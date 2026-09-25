@@ -32,6 +32,10 @@ internal static class PlayerAppearanceRegistry
 
 	private static readonly PlayerModel?[] Slots = new PlayerModel[8];
 
+	// Temporary models this registry created itself. A slot is "committed" once the companion stores a
+	// network-delivered ruler over it; only committed rulers are forwarded or re-applied to bodies.
+	private static readonly PlayerModel?[] Placeholders = new PlayerModel[8];
+
 	private static readonly HashSet<int> LoggedFallbackSlots = new HashSet<int>();
 
 	private static PlayerModel? _template;
@@ -57,6 +61,38 @@ internal static class PlayerAppearanceRegistry
 	{
 		appearance = ((playerId >= 0 && playerId < Slots.Length) ? Slots[playerId] : null);
 		return appearance != null;
+	}
+
+	public static bool IsCommitted(int playerId)
+	{
+		if (playerId < 0 || playerId >= Slots.Length)
+		{
+			return false;
+		}
+		PlayerModel? playerModel = Slots[playerId];
+		if (playerModel != null)
+		{
+			return !ReferenceEquals(playerModel, Placeholders[playerId]);
+		}
+		return false;
+	}
+
+	public static void ClearSlot(int playerId)
+	{
+		if (playerId >= 0 && playerId < Slots.Length)
+		{
+			Slots[playerId] = null;
+			Placeholders[playerId] = null;
+			LoggedFallbackSlots.Remove(playerId);
+		}
+	}
+
+	internal static void ResetSession()
+	{
+		for (int i = 0; i < Slots.Length; i++)
+		{
+			ClearSlot(i);
+		}
 	}
 
 	internal static void EnsureFallback(int playerId, Player? sourcePlayer = null)
@@ -111,6 +147,7 @@ internal static class PlayerAppearanceRegistry
 			appearance.steedType = 9;
 		}
 		Slots[playerId] = appearance;
+		Placeholders[playerId] = appearance;
 		if (LoggedFallbackSlots.Add(playerId))
 		{
 			Plugin.LogSource.LogWarning($"[Appearance lookup] Installed a safe temporary PlayerModel for Player {playerId + 1}; " + "the client's native ruler selection will replace it.");
@@ -227,6 +264,7 @@ internal static class PlayerAppearanceRegistry
 	internal static void Reset()
 	{
 		Array.Clear(Slots, 0, Slots.Length);
+		Array.Clear(Placeholders, 0, Placeholders.Length);
 		LoggedFallbackSlots.Clear();
 		_template = null;
 	}
