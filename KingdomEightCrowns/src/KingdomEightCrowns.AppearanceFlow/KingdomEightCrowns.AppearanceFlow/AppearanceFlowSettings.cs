@@ -11,6 +11,26 @@ internal static class AppearanceFlowSettings
 
 	private static readonly Dictionary<string, float> FloatCache = new Dictionary<string, float>();
 
+	private const string ConfigFileName = "openai.kingdomtwocrowns.eightcrowns.appearanceflow.cfg";
+
+	// BepInEx's own config folder; AppContext.BaseDirectory is not guaranteed to be the game root under
+	// the CoreCLR host, which silently ignored every edited setting.
+	private static string ConfigFilePath()
+	{
+		try
+		{
+			string text = Path.Combine(BepInEx.Paths.ConfigPath, ConfigFileName);
+			if (File.Exists(text))
+			{
+				return text;
+			}
+		}
+		catch
+		{
+		}
+		return Path.Combine(AppContext.BaseDirectory, "BepInEx", "config", ConfigFileName);
+	}
+
 	internal static bool OnePcNativeSequence => ReadBoolean("OnePcNativeSequence", fallback: false);
 
 	internal static bool SafeLoopbackDiagnostic => ReadBoolean("SafeLoopbackDiagnostic", fallback: false);
@@ -84,7 +104,7 @@ internal static class AppearanceFlowSettings
 				return value;
 			}
 		}
-		string text = Path.Combine(AppContext.BaseDirectory, "BepInEx", "config", "openai.kingdomtwocrowns.eightcrowns.appearanceflow.cfg");
+		string text = ConfigFilePath();
 		if (!File.Exists(text))
 		{
 			CacheSetting(settingName, fallback);
@@ -137,7 +157,7 @@ internal static class AppearanceFlowSettings
 				return value;
 			}
 		}
-		string path = Path.Combine(AppContext.BaseDirectory, "BepInEx", "config", "openai.kingdomtwocrowns.eightcrowns.appearanceflow.cfg");
+		string path = ConfigFilePath();
 		if (!File.Exists(path))
 		{
 			CacheFloat(settingName, fallback);

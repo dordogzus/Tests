@@ -1,4 +1,4 @@
-KINGDOM EIGHT CROWNS 0.14.20-alpha
+KINGDOM EIGHT CROWNS 0.14.21-alpha
 ==================================
 Extends Kingdom Two Crowns co-op from 2 to 8 players.
 Requires Kingdom Two Crowns version 2.1.4 (Steam) and BepInEx 6 IL2CPP
@@ -7,10 +7,10 @@ Requires Kingdom Two Crowns version 2.1.4 (Steam) and BepInEx 6 IL2CPP
 WHAT'S IN THE PACKAGE
 ---------------------
 BepInEx/plugins/KingdomEightCrowns/KingdomEightCrowns.dll
-    Core plugin (0.6.17-alpha): connection limits, player ID limits,
+    Core plugin (0.6.23-alpha): connection limits, player ID limits,
     expanded appearance/kingdom lookups.
 BepInEx/plugins/KingdomEightCrowns/KingdomEightCrowns.AppearanceFlow.dll
-    Companion plugin (0.14.20-alpha): dynamic 8-player session handling,
+    Companion plugin (0.14.21-alpha): dynamic 8-player session handling,
     join catch-up, packet relay, roster crossfade + scroll lock,
     scrollbar, Arabic day numbers, pixel-font nicknames, version badge.
 BepInEx/config/openai.kingdomtwocrowns.eightcrowns.cfg
@@ -26,8 +26,74 @@ INSTALL
    <game>\BepInEx\config\
 2. EVERY PLAYER who joins must install the same mod version.
 3. Launch the game. The BepInEx console should list both plugins:
-   "Kingdom Eight Crowns 0.6.17-alpha" and
-   "Kingdom Eight Crowns - Appearance Flow 0.14.20-alpha".
+   "Kingdom Eight Crowns 0.6.23-alpha" and
+   "Kingdom Eight Crowns - Appearance Flow 0.14.21-alpha".
+   Overwrite the two .cfg files too: older configs had developer probes
+   switched on.
+
+REPORTING PROBLEMS
+------------------
+Send <game>\BepInEx\LogOutput.log from the HOST and from EVERY client of
+the same session (they are overwritten on each launch, so copy them before
+restarting), plus what each player saw and roughly when. Only set
+[Diagnostics] HotPathTracing = true when asked; it adds per-RPC logging.
+
+WHAT'S FIXED IN 0.14.21
+-----------------------
+Players / bodies
+- Players 3-8 no longer drop out of the game's player list (coins,
+  building, interactions) when someone with a lower number leaves or is
+  still joining; the list is rebuilt without gaps.
+- The host keeps building and removing bodies after Player 2 leaves (it
+  used to freeze and keep destroyed bodies in the player list).
+- A body that fails to build retries with a short back-off instead of
+  re-cloning a whole Player every frame, and no longer blocks the others.
+- Bodies destroyed by a level change are rebuilt instead of failing
+  forever with "NetID ... is occupied".
+- When the last remote player leaves, the host runs the game's own
+  disconnect cleanup (no frozen Player 2 left behind).
+- Developer probes are off by default (they swapped in fake bodies for
+  15 seconds if the companion ever failed to load).
+
+Rulers / appearance
+- Each remote ruler is applied to a body once, and only from the model
+  the player actually picked. Duplicate deliveries (raw relay + host
+  re-broadcast + echo back to the sender) re-ran the game's model setup
+  on live bodies, which is what corrupted them.
+- A joining player no longer receives the host's placeholder as its own
+  look; Player 2's clone is dressed on Player 3+ machines; a client can
+  only publish its own ruler; a Player 3+ pick no longer overwrites the
+  real Player 2's ruler on the host.
+- Rulers of players who left are cleared, so the next joiner in that
+  slot does not inherit them.
+
+Network
+- One exception inside the game's receive or catch-up code no longer
+  leaves the host routing everything to a single player for the rest of
+  the session (lag, desync, "ghost" world state).
+- One bad packet or one failing player no longer stalls everyone's
+  outgoing traffic; relays no longer go to the same player twice.
+- The first player's join no longer gets live world updates mixed into
+  its catch-up (affected plain 2-player joins too).
+- A player who needs catch-up again (level load) is no longer kicked by
+  the join watchdog within a second; slow ruler picks get 15 minutes.
+- Leaving the Steam lobby now clears all peer state, so the next hosted
+  session does not start with phantom players (early "session full",
+  wrong player numbers, a join that never starts).
+- [Multiplayer] MaxPlayers is honoured by the companion too; MaxPlayers=2
+  really is vanilla networking now.
+
+Menu / UI
+- Short game texts made of Roman-numeral letters ("I", "Mix", "DLC", a
+  nickname like "Mimi"...) are no longer turned into numbers and
+  restyled; only the day counter is converted (now up to day 3999).
+- Closing the menu or the Online panel no longer leaves a stray copy of
+  the scrollbar banner on screen; its textures are freed.
+- The 8-slot roster only runs inside a Steam lobby.
+- Less per-frame reflection work; companion settings are read from
+  BepInEx's config folder even under non-standard launches.
+
+Still open (needs logs from a real session): see REPORTING PROBLEMS.
 
 WHAT'S FIXED IN 0.14.20
 -----------------------
