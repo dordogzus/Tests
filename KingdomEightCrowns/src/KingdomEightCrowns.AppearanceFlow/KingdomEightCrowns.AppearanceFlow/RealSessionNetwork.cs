@@ -223,6 +223,10 @@ internal static class RealSessionNetwork
 
 	private static MethodInfo _unityObjectDestroy;
 
+	private static readonly HashSet<IntPtr> WatchedCounterPointers = new HashSet<IntPtr>();
+
+	private static readonly Dictionary<Type, MemberInfo> PointerMemberCache = new Dictionary<Type, MemberInfo>();
+
 	private const int RosterScrollWindow = 2;
 
 	private const int MaximumPacketsPerPump = 256;
@@ -231,7 +235,7 @@ internal static class RealSessionNetwork
 
 	private const int JoiningIdleTimeoutSeconds = 120;
 
-	private const int JoiningTotalTimeoutSeconds = 300;
+	private const int JoiningTotalTimeoutSeconds = 900;
 
 	private static readonly object Gate = new object();
 
@@ -715,10 +719,10 @@ internal static class RealSessionNetwork
 		Patch(harmony, _steamPollMessages, "BeforeSteamPollMessages", "AfterSteamPollMessages");
 		Patch(harmony, _steamSend, "BeforeSteamSend", "AfterSteamSend");
 		Patch(harmony, _steamDispose, "BeforeSteamDispose", null);
-		Patch(harmony, original2, "BeforeAcceptP2PConnection", "AfterAcceptP2PConnection");
-		Patch(harmony, original3, "BeforeServerHandleOnConnect", "AfterServerHandleOnConnect");
+		Patch(harmony, original2, "BeforeAcceptP2PConnection", null, "AfterAcceptP2PConnection");
+		Patch(harmony, original3, "BeforeServerHandleOnConnect", null, "AfterServerHandleOnConnect");
 		Patch(harmony, original5, "BeforeRecvCatchupRequest", null);
-		Patch(harmony, original6, "BeforeRecvClientReady", "AfterRecvClientReady");
+		Patch(harmony, original6, "BeforeRecvClientReady", null, "AfterRecvClientReady");
 		Patch(harmony, methodInfo, null, "AfterCreateCatchupIterator");
 		Patch(harmony, methodInfo2, null, "AfterCreateCatchupIterator");
 		Patch(harmony, methodInfo3, null, "AfterCreateCatchupIterator");
@@ -780,7 +784,9 @@ internal static class RealSessionNetwork
 				MethodInfo methodInfo = type.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic).SingleOrDefault((MethodInfo method) => method.Name == methodName && method.GetParameters().Length == 1);
 				if (!(methodInfo == null))
 				{
-					harmony.Patch(methodInfo, null, new HarmonyMethod(typeof(RealSessionNetwork).GetMethod("AfterStartDayCounterShow", BindingFlags.Static | BindingFlags.NonPublic)));
+					HarmonyMethod registerCounters = new HarmonyMethod(typeof(RealSessionNetwork).GetMethod("AfterStartDayCounterShow", BindingFlags.Static | BindingFlags.NonPublic));
+					// Also as a prefix: the game can set the counter text inside these methods.
+					harmony.Patch(methodInfo, registerCounters, registerCounters);
 				}
 			}
 			Type type2 = FindLoadedType("UnityEngine.UI.Text");
@@ -884,6 +890,11 @@ internal static class RealSessionNetwork
 			{
 				// Keep only live counters; wrappers of destroyed labels used to pile up and be walked every frame.
 				WatchedCounterTexts.RemoveWhere((object watched) => !IsUnityAlive(watched));
+				WatchedCounterPointers.Clear();
+				foreach (object watched in WatchedCounterTexts)
+				{
+					WatchedCounterPointers.Add(TryReadNativePointer(watched));
+				}
 			}
 			string[] array = new string[2] { "dayCounter", "gameOverDays" };
 			foreach (string name in array)
@@ -891,9 +902,20 @@ internal static class RealSessionNetwork
 				object obj = ReadMember(__instance, name);
 				if (obj != null && !IsWatchedCounter(obj))
 				{
+					IntPtr pointer = TryReadNativePointer(obj);
 					lock (Gate)
 					{
 						flag |= WatchedCounterTexts.Add(obj);
+						if (pointer != IntPtr.Zero)
+						{
+							WatchedCounterPointers.Add(pointer);
+						}
+					}
+					// Text set before the counter was registered: re-set it through the converting setter hook.
+					string current = Convert.ToString(ReadMember(obj, "text"));
+					if (ParseRomanNumeral(current) > 0)
+					{
+						WriteMember(obj, "text", current);
 					}
 				}
 			}
@@ -1388,7 +1410,6 @@ internal static class RealSessionNetwork
 		{
 			return false;
 		}
-		object[] watched;
 		lock (Gate)
 		{
 			if (WatchedCounterTexts.Count == 0)
@@ -1399,7 +1420,6 @@ internal static class RealSessionNetwork
 			{
 				return true;
 			}
-			watched = WatchedCounterTexts.ToArray();
 		}
 		// Wrapper identity is not guaranteed across Il2Cpp calls; compare the native objects.
 		IntPtr pointer = TryReadNativePointer(instance);
@@ -1407,14 +1427,10 @@ internal static class RealSessionNetwork
 		{
 			return false;
 		}
-		foreach (object candidate in watched)
+		lock (Gate)
 		{
-			if (TryReadNativePointer(candidate) == pointer)
-			{
-				return true;
-			}
+			return WatchedCounterPointers.Contains(pointer);
 		}
-		return false;
 	}
 
 	private static void ShowVersionBadge(object menu)
@@ -2571,10 +2587,11 @@ internal static class RealSessionNetwork
 			}
 			object previousReceiving = _receivingConnection;
 			_packetCarriedModel = false;
-			_insidePump = true;
-			RouterScopeState state = BeginHostPeerScope(peerState);
+			RouterScopeState state = null;
 			try
 			{
+				_insidePump = true;
+				state = BeginHostPeerScope(peerState);
 				_steamReceive.Invoke(peerState.Connection, new object[2] { obj, num2 });
 			}
 			catch (Exception exception)
@@ -3589,18 +3606,6 @@ internal static class RealSessionNetwork
 			{
 				return true;
 			}
-			bool anyPeerLeft;
-			lock (Gate)
-			{
-				anyPeerLeft = HostPeers.Count > 0;
-			}
-			if (!anyPeerLeft)
-			{
-				// The last remote player is gone: let the game run its own Player 2 teardown so the host
-				// returns to its normal single-player state instead of keeping a frozen Player 2.
-				Plugin.LogSource.LogWarning("[Dynamic session] The last remote player left; running the stock disconnect cleanup.");
-				return true;
-			}
 			RefreshCurrentMenu();
 			Plugin.LogSource.LogWarning((ConnectedRemoteCount() > 0) ? "[Dynamic session] One peer left while other peers remain; skipped the stock global P2 teardown." : "[Dynamic session] Ignored a stale remote-disconnect callback after final peer cleanup; the host lobby remained online and ready for another invitation.");
 			return false;
@@ -3658,7 +3663,7 @@ internal static class RealSessionNetwork
 		{
 			return;
 		}
-		SendBodyControl(peerState.Connection, 1258291200, peerState.PlayerId, peerState.BodyNetId, "private logical-slot/body assignment");
+		bool assignmentDelivered = SendBodyControl(peerState.Connection, 1258291200, peerState.PlayerId, peerState.BodyNetId, "private logical-slot/body assignment");
 		PeerState[] array;
 		lock (Gate)
 		{
@@ -3679,11 +3684,12 @@ internal static class RealSessionNetwork
 				SendBodyControl(peerState3.Connection, 1275068416, peerState.PlayerId, peerState.BodyNetId, "new pending-peer body mapping");
 			}
 		}
-		peerState.AssignmentSent = true;
+		// Leave it unsent on failure so the next handshake retries instead of the joiner guessing its slot.
+		peerState.AssignmentSent = assignmentDelivered;
 		Plugin.LogSource.LogWarning("[Dynamic session] Sent Player " + (peerState.PlayerId + 1) + "'s private logical-slot assignment and body NetID " + peerState.BodyNetId + " before catch-up; synchronized " + array.Length + " body mapping(s).");
 	}
 
-	private static void SendBodyControl(object connection, int packetType, int playerId, int bodyNetId, string operation)
+	private static bool SendBodyControl(object connection, int packetType, int playerId, int bodyNetId, string operation)
 	{
 		object obj = Activator.CreateInstance(_intMessageType);
 		WriteMember(obj, "value", packetType | ((bodyNetId & 0x7FFF) << 8) | (playerId & 0xFF));
@@ -3691,7 +3697,9 @@ internal static class RealSessionNetwork
 		{
 			// Report and continue: throwing here aborted the loops that notify every other peer.
 			LogFaultOnce("body-control send (" + operation + ")", new InvalidOperationException("Could not send " + operation + " for Player " + (playerId + 1) + " on " + DescribeTransport(connection) + "."));
+			return false;
 		}
+		return true;
 	}
 
 	private static bool BeforeRecvAllowPlayerReroll(object[] __args)
@@ -3961,7 +3969,7 @@ internal static class RealSessionNetwork
 		object[] array;
 		lock (Gate)
 		{
-			array = (from peer in HostPeers.Values
+			array = (from peer in HostPeers.Values.Distinct()
 				where peer != selectingPeer && !peer.CatchupPending
 				orderby peer.PlayerId
 				select peer.Connection).ToArray();
@@ -4010,7 +4018,7 @@ internal static class RealSessionNetwork
 		object[] array;
 		lock (Gate)
 		{
-			array = (from other in HostPeers.Values
+			array = (from other in HostPeers.Values.Distinct()
 				where other != peer && !other.CatchupPending
 				select other.Connection).ToArray();
 		}
@@ -4048,12 +4056,25 @@ internal static class RealSessionNetwork
 			Plugin.LogSource.LogError("[Dynamic session] Dropped PlayerModel with invalid PlayerId " + num + ".");
 			return false;
 		}
+		bool corrected = false;
 		if (_insidePump)
 		{
 			PeerState sender = CurrentPeer();
+			if (sender != null && num == 0)
+			{
+				// Only the host owns slot 0; a client must not replace the host's ruler (nor have it relayed).
+				_packetCarriedModel = true;
+				if (LoggedModelRelays.Add(2000 + sender.PlayerId))
+				{
+					Plugin.LogSource.LogWarning("[Dynamic session] Ignored a host (Player 1) ruler model sent by Player " + (sender.PlayerId + 1) + ".");
+				}
+				return false;
+			}
 			if (sender != null && num >= 1 && num != sender.PlayerId)
 			{
 				// A client may only publish its own ruler; a wrong ID overwrote another player's look everywhere.
+				// The raw packet still carries the wrong ID, so it is not relayed; the host forwards the fixed copy.
+				_packetCarriedModel = true;
 				try
 				{
 					WriteMember(obj, "playerId", sender.PlayerId);
@@ -4068,15 +4089,16 @@ internal static class RealSessionNetwork
 					Plugin.LogSource.LogWarning("[Dynamic session] Player " + (sender.PlayerId + 1) + " sent its ruler under PlayerId " + num + "; stored it under its own slot instead.");
 				}
 				num = sender.PlayerId;
+				corrected = true;
 			}
 		}
 		SetSlot(num, obj);
-		if (_insidePump)
-		{
-			_packetCarriedModel = true;
-		}
 		if (num == 0 || num == LocalPlayerId || (num == 1 && LocalPlayerId <= 1))
 		{
+			if (corrected)
+			{
+				BroadcastStoredModel(num, obj);
+			}
 			return true;
 		}
 		lock (Gate)
@@ -4085,6 +4107,11 @@ internal static class RealSessionNetwork
 			{
 				Plugin.LogSource.LogWarning("[Dynamic session] Stored remote Player " + (num + 1) + "'s appearance in the expanded registry. The stock receiver was skipped because this machine represents that remote ruler through a dynamic body clone.");
 			}
+		}
+		if (_insidePump)
+		{
+			// The host forwards this ruler itself, so the raw packet must not also be relayed (double delivery).
+			_packetCarriedModel = true;
 		}
 		BroadcastStoredModel(num, obj);
 		TryReapplyStoredAppearance(num);
@@ -4585,8 +4612,7 @@ internal static class RealSessionNetwork
 		_nextRosterRefresh = timestamp + Math.Max(1L, Stopwatch.Frequency / 60);
 		object obj6 = ReadStaticMember(_menuType, "Inst");
 		bool flag3 = obj6 != null && UsesCrossfadeRoster(obj6);
-		// The 8-slot roster only exists for a Steam lobby; offline menus and single-player pause keep the stock banners.
-		if (!flag || !(flag3 ? (!IsNetworkingPanelOpen(obj6)) : ShouldShowRoster(obj6)) || AppearanceFlowSettings.OverlayDisableAll)
+		if (!(flag3 ? (!IsNetworkingPanelOpen(obj6)) : ShouldShowRoster(obj6)) || AppearanceFlowSettings.OverlayDisableAll)
 		{
 			if (!_rosterWasOpen)
 			{
@@ -7256,17 +7282,39 @@ internal static class RealSessionNetwork
 
 	private static IntPtr ReadIl2CppPointer(object instance)
 	{
-		Type type = instance.GetType();
+		Type runtimeType = instance.GetType();
+		MemberInfo cached;
+		lock (PointerMemberCache)
+		{
+			PointerMemberCache.TryGetValue(runtimeType, out cached);
+		}
+		if (cached is PropertyInfo cachedProperty)
+		{
+			return (IntPtr)cachedProperty.GetValue(instance, null);
+		}
+		if (cached is FieldInfo cachedField)
+		{
+			return (IntPtr)cachedField.GetValue(instance);
+		}
+		Type type = runtimeType;
 		while (type != null)
 		{
 			PropertyInfo property = type.GetProperty("Pointer", BindingFlags.DeclaredOnly | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 			if (property != null && property.CanRead)
 			{
+				lock (PointerMemberCache)
+				{
+					PointerMemberCache[runtimeType] = property;
+				}
 				return (IntPtr)property.GetValue(instance, null);
 			}
 			FieldInfo field = type.GetField("Pointer", BindingFlags.DeclaredOnly | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 			if (field != null)
 			{
+				lock (PointerMemberCache)
+				{
+					PointerMemberCache[runtimeType] = field;
+				}
 				return (IntPtr)field.GetValue(instance);
 			}
 			type = type.BaseType;

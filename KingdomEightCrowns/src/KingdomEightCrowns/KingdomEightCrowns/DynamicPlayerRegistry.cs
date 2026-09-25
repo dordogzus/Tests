@@ -583,20 +583,29 @@ public static class DynamicPlayerRegistry
 		{
 			return;
 		}
-		foreach (int id in dead)
-		{
-			if (DesiredNetIds.TryGetValue(id, out short netId))
+			foreach (int id in dead)
 			{
-				RemoveDeadRegistration(NetworkPostbox.Instance, netId);
+				if (DesiredNetIds.TryGetValue(id, out short netId))
+				{
+					RemoveDeadRegistration(NetworkPostbox.Instance, netId);
+				}
+				Bodies.Remove(id);
+				RemoveLogicalMappings(id);
+				BodyCreatedAt.Remove(id);
+				ReappliedBodies.Remove(id);
+				// The rebuilt body is a new object: it must be dressed again, not inherit the old fault mark.
+				LoggedPlayerModelFaults.Remove(id);
+				if (PlayerAppearanceRegistry.IsCommitted(id))
+				{
+					PendingAppearance.Add(id);
+				}
 			}
-			Bodies.Remove(id);
-			RemoveLogicalMappings(id);
-			BodyCreatedAt.Remove(id);
-			ReappliedBodies.Remove(id);
-		}
-		CloneObjects.RemoveWhere((GameObject go) => go == null);
-		_dirty = true;
-		Plugin.LogSource.LogWarning("[Dynamic bodies] " + dead.Length + " remote body/bodies were destroyed by the game (level change); they will be rebuilt.");
+			CloneObjects.RemoveWhere((GameObject go) => go == null);
+			_dirty = true;
+			// If the game keeps destroying clones, rebuild on the failure back-off instead of every frame.
+			_reconcileFailures++;
+			_nextReconcileAt = Stopwatch.GetTimestamp() + (long)(Math.Min(5.0, 0.25 * Math.Pow(2.0, Math.Min(_reconcileFailures - 1, 5))) * (double)Stopwatch.Frequency);
+			Plugin.LogSource.LogWarning("[Dynamic bodies] " + dead.Length + " remote body/bodies were destroyed by the game (level change); they will be rebuilt.");
 	}
 
 	private static bool RemoveDeadRegistration(NetworkPostbox? postbox, short netId)
@@ -629,7 +638,7 @@ public static class DynamicPlayerRegistry
 		}
 		lock (Gate)
 		{
-			ResetRuntimeBodies(reason);
+			ResetRuntimeBodies(reason, restoreNativeIdentity: true);
 			DesiredNetIds.Clear();
 			ActivePlayerIds.Clear();
 			_localOwnerId = -1;
@@ -969,7 +978,7 @@ public static class DynamicPlayerRegistry
 				// Every remote player is gone: hand the stock Player 2 body and player list back to the game.
 				if (Bodies.Count > 0 || _publishedActivePlayers != null)
 				{
-					ResetRuntimeBodies("no remote players remain");
+					ResetRuntimeBodies("no remote players remain", restoreNativeIdentity: true);
 				}
 				_dirty = false;
 				return;
@@ -1478,7 +1487,9 @@ public static class DynamicPlayerRegistry
 		}
 	}
 
-	private static void ResetRuntimeBodies(string reason)
+	// restoreNativeIdentity: give Player 2's body back its stock playerId/authority. Only when the session
+	// ends; on a level load the local body would briefly take Player 2's appearance until the next reconcile.
+	private static void ResetRuntimeBodies(string reason, bool restoreNativeIdentity = false)
 	{
 		Player[] array = Bodies.Values.Distinct().ToArray();
 		foreach (Player player in array)
@@ -1510,11 +1521,11 @@ public static class DynamicPlayerRegistry
 						component.Setup(parentHeaderRef, semiStatic: false);
 					}
 				}
-				if (_nativePlayerTwoOriginalId >= 0 && _nativePlayerTwo.playerId != _nativePlayerTwoOriginalId)
+				if (restoreNativeIdentity && _nativePlayerTwoOriginalId >= 0 && _nativePlayerTwo.playerId != _nativePlayerTwoOriginalId)
 				{
 					_nativePlayerTwo.playerId = _nativePlayerTwoOriginalId;
 				}
-				if (_nativePlayerTwoOriginalId >= 0 && _nativePlayerTwo.hasLocalAuthority != _nativePlayerTwoOriginalAuthority)
+				if (restoreNativeIdentity && _nativePlayerTwoOriginalId >= 0 && _nativePlayerTwo.hasLocalAuthority != _nativePlayerTwoOriginalAuthority)
 				{
 					_nativePlayerTwo.hasLocalAuthority = _nativePlayerTwoOriginalAuthority;
 				}
@@ -1559,6 +1570,7 @@ public static class DynamicPlayerRegistry
 		LogicalIds.Clear();
 		BodyCreatedAt.Clear();
 		ReappliedBodies.Clear();
+		LoggedPlayerModelFaults.Clear();
 		_nativePlayerTwo = null;
 		_nativePlayerTwoNetId = -1;
 		_nativePlayerTwoOriginalId = -1;

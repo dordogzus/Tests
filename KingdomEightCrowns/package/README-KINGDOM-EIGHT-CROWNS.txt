@@ -50,8 +50,6 @@ Players / bodies
   re-cloning a whole Player every frame, and no longer blocks the others.
 - Bodies destroyed by a level change are rebuilt instead of failing
   forever with "NetID ... is occupied".
-- When the last remote player leaves, the host runs the game's own
-  disconnect cleanup (no frozen Player 2 left behind).
 - Developer probes are off by default (they swapped in fake bodies for
   15 seconds if the companion ever failed to load).
 
@@ -89,7 +87,6 @@ Menu / UI
   restyled; only the day counter is converted (now up to day 3999).
 - Closing the menu or the Online panel no longer leaves a stray copy of
   the scrollbar banner on screen; its textures are freed.
-- The 8-slot roster only runs inside a Steam lobby.
 - Less per-frame reflection work; companion settings are read from
   BepInEx's config folder even under non-standard launches.
 
