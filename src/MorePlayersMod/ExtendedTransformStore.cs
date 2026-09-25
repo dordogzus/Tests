@@ -56,15 +56,66 @@ internal static class ExtendedTransformStore
         Log = log;
         CfgEnabled = config.Bind("Garage", "PreserveExtendedTransforms", true,
             "Capture the authoritative build snapshot at garage stop, then restore GUID-matched placements through the game's complete transform propagation path after returning to build mode.");
+        CfgPersist = config.Bind("Garage", "PersistExactPlacements", true,
+            "Keep exact placements of parts far out in the enlarged garage across game restarts (side-car file in BepInEx/config/MorePlayers).");
         CfgCodecProbe = config.Bind("Garage", "ExtendedTransformCodecProbe", false,
             "Opt-in single build-snapshot Encode/Decode diagnostic per session, on local copies with a registered prefab and ready Core maps. Does not write decoded data. Native codec semantics are not established by interop signatures.");
     }
 
     internal static bool GarageBuildMode => _garageBuildMode;
 
+    private static bool _seeded;
+    private static ConfigEntry<bool> CfgPersist;
+
+    /// <summary>Latest authoritative build layout: live snapshot in build mode, frozen one during flight.</summary>
+    internal static void PersistOnSave()
+    {
+        if (CfgPersist == null || !CfgPersist.Value || _blocked) return;
+        var source = _phase == Phase.Build || _phase == Phase.Checking ? _snapshot : Frozen;
+        if (source.Count == 0) return;
+        var current = new Dictionary<string, Logic.PlacementRecord>();
+        long stamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        foreach (var pair in source)
+        {
+            var t = pair.Value.Transform._transform;
+            current[pair.Key] = new Logic.PlacementRecord
+            {
+                Prefab = pair.Value.Prefab, Stamp = stamp,
+                PX = t.pos.x, PY = t.pos.y, PZ = t.pos.z,
+                RX = t.rot.value.x, RY = t.rot.value.y, RZ = t.rot.value.z, RW = t.rot.value.w,
+            };
+        }
+        int total = PlacementStore.Save(current);
+        if (total >= 0) Notice($"Exact placements saved: {current.Count} parts ({total} records on disk).");
+    }
+
+    private static bool SeedFromDisk(Dictionary<string, Sample> current)
+    {
+        if (_seeded || CfgPersist == null || !CfgPersist.Value) return false;
+        _seeded = true;
+        var stored = PlacementStore.Load();
+        if (stored.Count == 0) return false;
+        Frozen.Clear();
+        foreach (var pair in current)
+        {
+            if (!stored.TryGetValue(pair.Key, out var r) || r.Prefab != pair.Value.Prefab) continue;
+            var exact = pair.Value;
+            var t = exact.Transform;
+            t._transform.pos = new float3(r.PX, r.PY, r.PZ);
+            t._transform.rot = new quaternion { value = new float4(r.RX, r.RY, r.RZ, r.RW) };
+            if (!FiniteTransform(t) || SameTransform(t, pair.Value.Transform)) continue;
+            exact.Transform = t;
+            Frozen[pair.Key] = exact;
+        }
+        if (Frozen.Count == 0) return false;
+        Notice($"Exact placements from the last session: {Frozen.Count} parts differ from the game's compact save and will be restored.");
+        return true;
+    }
+
     internal static void ResetSession()
     {
         Clear();
+        _seeded = false;
         _blocked = false;
         _garageBuildMode = false;
         _restoreRequested = false;
@@ -177,7 +228,12 @@ internal static class ExtendedTransformStore
                 _coreEntity = coreEntity;
                 _basis = basis;
                 _phase = flight ? Phase.Flight : Phase.Build;
-                Notice($"Garage polling: IsCreated={flight}; initial observation never restores.");
+                // First garage of a session: seed exact placements saved by an earlier session,
+                // then reuse the normal flight->build restore path (GUID+prefab matched).
+                if (!flight && SeedFromDisk(ReadSnapshot(em)))
+                    _phase = Phase.Flight;
+                else
+                    Notice($"Garage polling: IsCreated={flight}; initial observation never restores.");
             }
             if (flight)
             {

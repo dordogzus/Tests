@@ -24,6 +24,7 @@ namespace UnityEngine
         public Il2CppArrayBase<T> GetComponentsInChildren<T>(bool includeInactive) => throw null;
         public T GetComponentInParent<T>(bool includeInactive) => throw null;
         public T GetComponent<T>() => throw null;
+        public Il2CppArrayBase<Component> GetComponentsInChildren(Il2CppSystem.Type type, bool includeInactive) => throw null;
     }
 
     public class Behaviour : Component
@@ -67,6 +68,8 @@ namespace UnityEngine
         public Transform GetChild(int index) => throw null;
         public void SetParent(Transform parent, bool worldPositionStays) => throw null;
         public void SetAsLastSibling() => throw null;
+        public int GetSiblingIndex() => throw null;
+        public void SetSiblingIndex(int index) => throw null;
     }
 
     public class RectTransform : Transform
@@ -142,6 +145,7 @@ namespace UnityEngine
         public Resources(IntPtr pointer) : base(pointer) { }
         public static Il2CppArrayBase<T> FindObjectsOfTypeAll<T>() where T : Object => throw null;
         public static T GetBuiltinResource<T>(string path) where T : Object => throw null;
+        public static Il2CppReferenceArray<Object> FindObjectsOfTypeAll(Il2CppSystem.Type type) => throw null;
     }
 
     public class Time : Il2CppSystem.Object

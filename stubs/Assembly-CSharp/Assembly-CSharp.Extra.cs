@@ -24,6 +24,11 @@ public partial class Core
         public int _amount { get => throw null; set => throw null; }
     }
 
+    public partial class DiskWorldSave
+    {
+        public void SaveToFile() => throw null;
+    }
+
     public partial struct Singleton
     {
         public int GetMaxAvailableComponents(SCPrefab scPrefab) => throw null;

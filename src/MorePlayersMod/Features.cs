@@ -29,6 +29,7 @@ internal static class Features
         typeof(Patch_Tick),
         typeof(Patch_GarageBeforeStop),
         typeof(Patch_GarageStartRunning),
+        typeof(Patch_WorldSave),
     };
 
     /// <summary>
@@ -73,6 +74,7 @@ internal static class Features
         FrontierBlocks.Bind(config, log);
         FrontierRuntime.Bind(config, log);
         ModOverlay.Bind(config, log, maxPlayers);
+        VanillaLobbyList.Bind(config, log, maxPlayers);
 
         try
         {

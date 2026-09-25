@@ -15,9 +15,10 @@ star core, a plasma drive, oxygen and radiation systems, and hangar panels.
 | Area | What you get |
 | --- | --- |
 | **24 players** | Lobby size and the server's "server is full" check go from 4 to `MaxPlayers` (default 24, up to 64). This uses a native patch plus a Steam `CreateLobby` / `SetLobbyMemberLimit` fallback. Players 5+ each get their own distinct colour: `Core._availablePlayerColors` is extended, and the vanilla colours stay. |
+| **Vanilla lobby list** | The game's own lobby member list gets a row for every player it doesn't list yet. Each added row is a copy of one of the game's own rows, so it keeps the vanilla look; its buttons, avatar and row scripts are disabled so it can't act on the wrong player. If the game already lists everyone, nothing is changed. |
 | **Crew roster UI** | `F6` opens a roster with a slot for every possible player (3 columns × 8 rows for 24). Each slot shows the player's name, colour, `HOST`/`YOU` tags and open slots. `F5` opens the Steam invite dialog, and `PgUp`/`PgDn` pages through larger lobbies. While you're in a lobby, a `CREW n / 24` badge shows in the top-right corner. |
 | **Seats you earn** | Nothing is handed out at start. Each vanilla **package delivery** pays a pack sized for the current crew: Moon runs pay 4 seats + 2 consoles per 4 players, Earth runs pay consoles and power, and outer-rim runs pay frames, glass, thrusters and seats. Progress is rebuilt from the world save, so it survives restarts. When more players join, the packs are recalculated for the bigger crew. |
-| **12× build area** | The yellow build border for the active station is widened on X and Z (height stays vanilla, and the area stays centred). The floor is tiled 12×12 at native texture scale, and a solid floor collider is added. The station structures around the garage (walls, lamps, cranes…) move out to the new border without being scaled. Exact placements are restored after a flight → garage return. |
+| **12× build area** | The yellow build border for the active station is widened on X and Z (height stays vanilla, and the area stays centred). The floor is tiled 12×12 at native texture scale, and a solid floor collider is added. The station structures around the garage (walls, lamps, cranes…) move out to the new border without being scaled. Exact placements are restored after a flight → garage return **and after a game restart**: the game's compact save loses precision far out, so every world save also writes `BepInEx/config/MorePlayers/placements.txt`. |
 | **Frontier blocks** | 13 new parts plus 3 optional weapon previews. Each is a real native part cloned from a vanilla donor, then renamed and re-tuned (see below). They unlock in tiers after **1 / 3 / 6** supply runs. |
 | **Life support** | Ships that carry Frontier life-support blocks are simulated. Reactors leak radiation, **radiation walls** within 6 m absorb some of it, and **radiation vents** pipe some of it outside. **Oxygen generators and scrubbers** each support a number of crew. `F7` shows the HUD, and the screen tints when radiation or oxygen gets dangerous. |
 
@@ -81,6 +82,8 @@ the code compiles. Use the game build for the DLL you actually play with.
 | Garage | `RelocateSurroundings` | true | move station structures out to the new border |
 | Garage | `SurroundingsRing` | 3 | how far out (in vanilla half-widths) structures count as surroundings |
 | Garage | `PreserveExtendedTransforms` | true | restore exact far placements after flight → garage |
+| Garage | `PersistExactPlacements` | true | keep exact placements across restarts (`MorePlayers/placements.txt`) |
+| UI | `ExtendVanillaLobbyList` | true | add vanilla-style rows to the game's lobby list for players beyond its rows |
 | Contracts | `EnableSupplyRuns` | true | package deliveries pay crew packs |
 | Frontier | `EnableFrontierBlocks` | true | register Frontier parts (restart required) |
 | Frontier | `EnableLifeSupport` | true | radiation/oxygen simulation + HUD |
@@ -96,14 +99,14 @@ profiles off).
 - **Native patch offsets** are for the build the v2.20.6 mod targeted (Unity 6000.4.7f1). After a
   game update the byte check fails safely and the log says so. The Steam lobby fallback still
   raises the lobby size, but the server-full check then stays at 4.
-- **The vanilla lobby list** is not rewritten. The F6 roster is the 24-slot view.
+- **The vanilla lobby list** is found at runtime from the texts that show member names. If the game draws that list in a way the mod can't detect, the log says nothing about extending it, and the F6 roster is still the 24-slot view. A very long list can run past the bottom of its panel.
 - **Life support effects** are warnings, the HUD and the screen tint only. The mod doesn't change
   vanilla player health.
 - **Weapons** are previews: they're parts plus plasma charging. Firing needs a projectile and
   damage layer that hasn't been written yet.
-- **Far placements across a restart**: exact positions are kept within a session. Whether the
-  game's compact save codec keeps parts far outside the vanilla square across a restart hasn't
-  been tested yet.
+- **Far placements across a restart** are restored from the side-car file, matched by part GUID and
+  type. The file is written on every world save; if the game is closed without saving, the
+  last saved layout is restored, just as the game itself would.
 - Each Frontier block's stat tuning depends on the donor's field names in your build. Check the
   log line `Frontier block '…' <- donor '…'; tuned: …`.
 

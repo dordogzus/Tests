@@ -19,4 +19,8 @@
 - Fixes from v2.20.6: `SafeMode`/`FeatureProfile` no longer silently disable most modules by
   default. Removed the budget postfix that double-counted grants. Removed the diagnostic-only
   modules (SaveWatch, ShipWatch, TeleportWatch, CustomItems, ModBoard).
+- Lobby: the game's own lobby member list gets vanilla-style rows (inert clones of its own rows) for
+  players beyond the rows it shows.
+- Garage: exact placements are also saved to `BepInEx/config/MorePlayers/placements.txt` on every
+  world save and restored after a restart (GUID + part type matched).
 - Repository: builds without the game through `stubs/`, xUnit tests for the logic, CI.

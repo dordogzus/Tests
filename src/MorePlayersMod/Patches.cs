@@ -145,6 +145,15 @@ internal static class Patch_Tick
     }
 }
 
+[HarmonyPatch(typeof(Core.DiskWorldSave), nameof(Core.DiskWorldSave.SaveToFile))]
+internal static class Patch_WorldSave
+{
+    static void Postfix()
+    {
+        try { ExtendedTransformStore.PersistOnSave(); } catch { }
+    }
+}
+
 // The garage root matrix is widened by Zone.ApplyRootAtRuntime (tick + garage UI
 // refresh) instead of patching the value-type method GarageGrabberSingleton.SetRootMatrix.
 

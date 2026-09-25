@@ -68,6 +68,7 @@ public class ModOverlay : MonoBehaviour
         {
             if (!_built) Build();
             HandleKeys();
+            VanillaLobbyList.Tick();
             float now = Time.unscaledTime;
             if (now < _nextRefresh) return;
             _nextRefresh = now + 0.25f;
