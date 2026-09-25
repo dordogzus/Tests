@@ -1,0 +1,140 @@
+## Settings file was created by plugin More Players v2.20.6
+## Plugin GUID: com.bondi.moreplayers
+
+[Contracts]
+
+## Vanilla package deliveries advance the matching custom CREW mission and pay its pack.
+# Setting type: Boolean
+# Default value: true
+EnableSupplyRuns = true
+
+## Announce crew levels on Delivery/Special completions (flavor only, no grants).
+# Setting type: Boolean
+# Default value: true
+EnableCrewLevels = true
+
+## How long crew announcements stay on screen.
+# Setting type: Single
+# Default value: 8
+AnnounceSeconds = 8
+
+## Deprecated in v2.17. Crew notices now use vanilla temporary messages.
+# Setting type: Boolean
+# Default value: false
+ShowMissionBoard = false
+
+PackRotation = Seats,Consoles,Power,Frames,Glass,Thrusters,Cables,Tools
+
+PackAmount = 4
+
+CrewLevelSeatBonus = 1
+
+CrewLevelConsoleBonus = 1
+
+SupplyRunSeatBonus = 2
+
+SupplyRunConsoleBonus = 2
+
+[CrewParts]
+
+## Grant base seats/consoles automatically (scaled by MaxPlayers). Everything else is mission-earned.
+# Setting type: Boolean
+# Default value: true
+BoostAtHostStart = true
+
+## Free original seats at start. Default 0: everything is mission-earned (vanilla starter seats stay).
+# Setting type: Int32
+# Default value: 0
+BaseSeatBonus = 0
+
+## Free original consoles/controls at start. Default 0: mission-earned.
+# Setting type: Int32
+# Default value: 0
+BaseConsoleBonus = 0
+
+## Override substrings for the Seats class (empty = default).
+# Setting type: String
+# Default value: Seat,Chair,Cockpit
+SeatNameFilter = Seat,Chair,Cockpit
+
+## Override substrings for the Consoles class (empty = default).
+# Setting type: String
+# Default value: Console,Lever,Button,Knob,Valve,Joystick,Control,Switch,Panel,Monitor,Radar
+ConsoleNameFilter = Console,Lever,Button,Knob,Valve,Joystick,Control,Switch,Panel
+
+## Log every catalog part name with its class once.
+# Setting type: Boolean
+# Default value: false
+LogAllPartNames = false
+
+## Log garage row count on build-menu refresh (once with full names + amounts).
+# Setting type: Boolean
+# Default value: true
+LogGarageCatalog = true
+
+[CustomItems]
+
+## One-time test: duplicate the Seat entry in the live parts catalog to see if the garage picks it up (row count 308 -> 309).
+# Setting type: Boolean
+# Default value: false
+CatalogDupTest = false
+
+[Garage]
+
+## Capture the authoritative build snapshot at garage stop, then restore GUID-matched placements through the game's complete transform propagation path after returning to build mode.
+# Setting type: Boolean
+# Default value: true
+PreserveExtendedTransforms = true
+
+## Opt-in single build-snapshot Encode/Decode diagnostic per session, on local copies with a registered prefab and ready Core maps. Does not write decoded data. Native codec semantics are not established by interop signatures.
+# Setting type: Boolean
+# Default value: false
+ExtendedTransformCodecProbe = false
+
+## Garage build-volume width and depth scale as a whole number from 1 to 4; height stays vanilla and the area remains centered.
+# Setting type: Single
+# Default value: 2
+ZoneMultiplier = 2
+
+## Enable deferred garage floor/collider expansion only while the garage is active; planet scene loading never mutates station renderers.
+# Setting type: Boolean
+# Default value: true
+EnableGarageExpansion = true
+
+## Bounded garage floor renderer, mesh, transform, and physics registration diagnostics.
+# Setting type: Boolean
+# Default value: false
+DiagPlatforms = false
+
+[General]
+
+## Maximum players in a session (lobby size + server accept limit). Vanilla is 4. Only the host's copy of the mod matters for the cap.
+# Setting type: Int32
+# Default value: 12
+# Acceptable value range: From 2 to 32
+MaxPlayers = 12
+
+## Disables all game-side hooks and modules while keeping the lobby cap patch; used to isolate planet-load crashes.
+# Setting type: Boolean
+# Default value: true
+SafeMode = false
+
+## Diagnostic isolation profile: 0 = all features, 1 = manager tick only.
+# Setting type: Int32
+# Default value: 0
+FeatureProfile = 2
+
+[Internal]
+
+## Do not edit: marks which defaults your file already received.
+# Setting type: Int32
+# Default value: 0
+ConfigVersion = 2206
+
+[Missions]
+
+## Add 3 custom CREW missions after the garage/world is ready; initialization is deferred away from planet loading.
+# Setting type: Boolean
+# Default value: true
+EnableCustomMissions = true
+

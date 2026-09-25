@@ -1,0 +1,11 @@
+bin/
+obj/
+out/
+dist/
+*.user
+*.suo
+.vs/
+.idea/
+TestResults/
+*.log
+.hoplite/
