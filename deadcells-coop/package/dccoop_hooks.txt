@@ -1,0 +1,16 @@
+# DC-Coop hook table. Delete this file to use the built-in table.
+# Each hook is validated against the game's bytecode: if a class/method is
+# missing or its signature differs, only that hook is skipped (see
+# dccoop_loader.log). Use tools\hlbc-dump.exe hlboot.dat <filter> to find names.
+#
+# hook <native> <Class> <method> <notify|cancel|exit|rewrite:N> <signature>
+#   signature letters: o object, i int, f float, b bool, v void; ":" then return
+
+hook tick         Game        update        notify      o:v
+hook level_start  Game        onLevelStart  notify      o:v
+hook hero_update  en.Hero     update        cancel      o:v
+hook mob_update   en.Mob      update        cancel      o:v
+hook mob_init     en.Mob      init          exit        o:v
+hook damage       en.Entity   hit           rewrite:2   ooi:v
+hook dispose      en.Entity   dispose       notify      o:v
+spawner en.Hero
