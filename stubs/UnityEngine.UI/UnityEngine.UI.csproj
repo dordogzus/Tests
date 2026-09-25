@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>UnityEngine.UI</AssemblyName>
+    <AssemblyVersion>0.0.0.0</AssemblyVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Il2Cppmscorlib\Il2Cppmscorlib.csproj" />
+    <ProjectReference Include="..\UnityEngine.CoreModule\UnityEngine.CoreModule.csproj" />
+    <ProjectReference Include="..\UnityEngine.TextRenderingModule\UnityEngine.TextRenderingModule.csproj" />
+    <ProjectReference Include="..\UnityEngine.UIModule\UnityEngine.UIModule.csproj" />
+  </ItemGroup>
+</Project>

@@ -8,20 +8,20 @@ using System.Runtime.InteropServices;
 namespace MorePlayersMod;
 
 /// <summary>
-/// Raises Approximate Up's hard 4-player cap, then (host-side) unlocks extra
-/// crew parts and runs co-op supply contracts so 5-12 players have jobs,
-/// not just seats to sit in.
+/// More Players: Frontier - raises Approximately Up's hard 4-player cap (24 by
+/// default), earns the extra seats through co-op supply runs, enlarges every
+/// garage build area (12x by default) and adds Frontier tech blocks.
 ///
-/// Layout: this file touches NO game types and NO Harmony. All game-API code
-/// lives in Features/Contracts/CrewParts/Patches so a game update can only
-/// disable the bonus modules (caught below), never the native cap unlock.
+/// Layout: this file touches no game types directly. All game-API code lives
+/// in Features and the modules it starts, so a game update can only disable
+/// those modules (caught below), never the native cap unlock.
 /// </summary>
 [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
 public class MorePlayersPlugin : BasePlugin
 {
     public const string PluginGuid = "com.bondi.moreplayers";
     public const string PluginName = "More Players";
-    public const string PluginVersion = "2.20.6";
+    public const string PluginVersion = "3.0.0";
 
     private const string GameModule = "GameAssembly.dll";
 
@@ -37,13 +37,14 @@ public class MorePlayersPlugin : BasePlugin
 
     public override void Load()
     {
-        _maxPlayers = Config.Bind("General", "MaxPlayers", 12,
+        _maxPlayers = Config.Bind("General", "MaxPlayers", Logic.CrewProgression.DefaultMaxPlayers,
             new ConfigDescription(
                 "Maximum players in a session (lobby size + server accept limit). Vanilla is 4. " +
-                "Only the host's copy of the mod matters for the cap.",
-                new AcceptableValueRange<int>(2, 32)));
+                "The host's value decides the cap; every player should run the mod for the roster, colours and Frontier blocks.",
+                new AcceptableValueRange<int>(2, Logic.CrewProgression.AbsoluteMaxPlayers)));
+        Features.MigrateCore(Config, _maxPlayers, Log);
 
-        int n = _maxPlayers.Value;
+        int n = Logic.CrewProgression.ClampMaxPlayers(_maxPlayers.Value);
         try
         {
             Log.LogInfo($"{PluginName} {PluginVersion}: run {DateTime.Now:HH:mm:ss} pid={System.Diagnostics.Process.GetCurrentProcess().Id}, cap -> {n}");
@@ -62,11 +63,14 @@ public class MorePlayersPlugin : BasePlugin
 
         try
         {
-            Features.Init(Config, Log, n);
+            if (Features.Init(Config, Log, n))
+            {
+                AddComponent<ModOverlay>();
+            }
         }
         catch (Exception e)
         {
-            Log.LogWarning($"Bonus modules (parts/contracts) disabled, cap unlock still active: {e.GetType().Name}: {e.Message}");
+            Log.LogWarning($"Game-side modules disabled, cap unlock still active: {e.GetType().Name}: {e.Message}");
         }
     }
 

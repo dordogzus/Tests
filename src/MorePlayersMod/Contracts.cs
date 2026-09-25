@@ -16,11 +16,12 @@ namespace MorePlayersMod;
 ///   bonus, so scouts, haulers, builders and herders all progress the crew.
 /// * SUGGESTIONS: the mod points the crew at the next vanilla package
 ///   objective (Earth first, then outward), so there is always a "main
-///   quest" for 5-12 players. Suggestions never block: ANY package delivery
+///   quest" for 5-24 players. Suggestions never block: ANY package delivery
 ///   fulfils the run.
 ///
-/// All state is in-memory, host-authoritative for announcements; part grants
-/// are local prefab data so every modded client stays consistent.
+/// Progress is rebuilt from the world save (completed package objectives), so
+/// earned seats and Frontier tiers survive restarts, and is recomputed when the
+/// crew grows so packs always match the current lobby size.
 /// </summary>
 internal static class Contracts
 {
@@ -40,6 +41,11 @@ internal static class Contracts
     private static int _crewLevel;
     private static int _suggestIdx;
     private static List<string> _packageTitles;
+    private static readonly HashSet<uint> _sessionPackages = new HashSet<uint>();
+    private static readonly List<LobbyMember> _members = new List<LobbyMember>();
+    private static int _savedPackages;
+    private static int _grantCrew;
+    private static float _nextCrewCheck;
 
     internal static void Bind(ConfigFile config, ManualLogSource log, int maxPlayers)
     {
@@ -96,13 +102,12 @@ internal static class Contracts
         if (_setupDone) return;
         _setupDone = true;
         _titlesFinalized = false; // save may not exist yet; tick retries later
-        CrewParts.ResetBonuses();
         try { if (CustomMissions.Enabled()) CustomMissions.EnsureInjected(); } catch { }
-        try { CustomItems.EnsureTested(); } catch { }
+        Recompute(reason);
         try { if (Zone.ExpansionEnabled && !Zone.Done) Zone.EnsureScaled(); } catch { }
         RefreshPackageTitles();
         if (announce)
-            Announce($"MORE PLAYERS x{MaxPlayers} - original crew parts unlocked in garage. {SuggestNext()}");
+            Announce($"MORE PLAYERS x{MaxPlayers} - deliver packages to earn seats for the whole crew. {SuggestNext()}");
         else
             Log.LogInfo($"Contracts: silent setup done ({reason}), garage grants armed.");
     }
@@ -142,11 +147,13 @@ internal static class Contracts
             if (type == ObjectiveType.Package)
             {
                 if (!CfgContracts.Value) return;
-                // Packs come ONLY from custom-mission triggers. Unmapped vanilla
-                // packages pay vanilla rewards only - never our packs.
+                uint oid = 0;
+                try { oid = (uint)objective._objectiveID; } catch { }
+                if (oid != 0 && (_sessionPackages.Contains(oid) || _savedPackagesIds.Contains(oid))) return; // repeat delivery: vanilla reward only
                 string missionTitle, granted;
-                if (!CustomMissions.TryCompleteFromVanilla(objective, out missionTitle, out granted)) return;
-                _supplyRuns++;
+                if (!CustomMissions.TryCompleteFromVanilla(objective, Math.Max(1, _grantCrew), out missionTitle, out granted)) return;
+                if (oid != 0) _sessionPackages.Add(oid);
+                _supplyRuns = _savedPackages + _sessionPackages.Count;
                 if (_isHost)
                     Announce($"SUPPLY RUN #{_supplyRuns} COMPLETE ({missionTitle}): {title} delivered - {granted}, in the garage. {SuggestNext()}");
             }
@@ -166,6 +173,80 @@ internal static class Contracts
     }
 
     internal static int SupplyRuns => _supplyRuns;
+
+    private static readonly HashSet<uint> _savedPackagesIds = new HashSet<uint>();
+
+    private static int LiveCrew()
+    {
+        try { if (SteamLobby.TryRead(_members, out _, out _) && _members.Count > 0) return _members.Count; } catch { }
+        return 1;
+    }
+
+    /// <summary>
+    /// Authoritative rebuild: reset our grants, then pay one pack per completed package
+    /// objective in the save plus this session's deliveries, sized for the current crew.
+    /// </summary>
+    internal static void Recompute(string reason)
+    {
+        try
+        {
+            int crew = Math.Max(_grantCrew, LiveCrew());
+            CrewParts.ResetBonuses();
+            _savedPackagesIds.Clear();
+            var done = CompletedObjectiveIds();
+            var names = PackageNames();
+            foreach (var id in done)
+            {
+                if (!names.TryGetValue(id, out var idName)) continue;
+                _savedPackagesIds.Add(id);
+                CustomMissions.GrantSilently(idName, crew);
+            }
+            foreach (var id in _sessionPackages)
+                if (!_savedPackagesIds.Contains(id) && names.TryGetValue(id, out var idName)) CustomMissions.GrantSilently(idName, crew);
+            _savedPackages = _savedPackagesIds.Count;
+            var all = new HashSet<uint>(_savedPackagesIds);
+            all.UnionWith(_sessionPackages);
+            _supplyRuns = all.Count;
+            _grantCrew = crew;
+            Log.LogInfo($"Crew progress rebuilt ({reason}): {_supplyRuns} supply runs, packs sized for {crew} crew (x{Logic.CrewProgression.CrewScale(crew)}).");
+        }
+        catch (Exception e) { Log.LogWarning($"Crew progress rebuild skipped: {e.GetType().Name}: {e.Message}"); }
+    }
+
+    private static Dictionary<uint, string> PackageNames()
+    {
+        var map = new Dictionary<uint, string>();
+        try
+        {
+            var core = Core.Get();
+            if (core == null || core._objectives == null) return map;
+            foreach (var o in core._objectives)
+            {
+                try
+                {
+                    if (o == null || o._objectiveType != ObjectiveType.Package) continue;
+                    uint id = (uint)o._objectiveID;
+                    if (CustomMissions.IsOurs(id)) continue;
+                    map[id] = o._objectiveID.ToString();
+                }
+                catch { }
+            }
+        }
+        catch { }
+        return map;
+    }
+
+    /// <summary>More crew joined than the packs were sized for: rebuild so seats keep up.</summary>
+    private static void CheckCrewGrowth()
+    {
+        float now = UnityEngine.Time.realtimeSinceStartup;
+        if (now < _nextCrewCheck || !_setupDone) return;
+        _nextCrewCheck = now + 10f;
+        int crew = LiveCrew();
+        if (Logic.CrewProgression.CrewScale(crew) <= Logic.CrewProgression.CrewScale(_grantCrew)) return;
+        Recompute($"crew grew to {crew}");
+        if (_isHost) Announce($"CREW OF {crew}: supply-run packs rescaled - more seats and consoles in the garage.");
+    }
     internal static int CrewLevel => _crewLevel;
 
     /// <summary>Re-announces the mission when progress changed (garage visits stay current).</summary>
@@ -225,6 +306,8 @@ internal static class Contracts
     /// <summary>Retry the mission queue once the world save exists.</summary>
     internal static void TickRefresh()
     {
+        try { CheckCrewGrowth(); } catch { }
+        try { CrewParts.TickRefresh(); } catch { }
         try
         {
             if (_titlesFinalized) return;
@@ -232,6 +315,7 @@ internal static class Contracts
             var world = core != null && core._save != null ? core._save._world : null;
             if (world == null) return;
             RefreshPackageTitles();
+            Recompute("world save ready");
             _titlesFinalized = true;
         }
         catch { }

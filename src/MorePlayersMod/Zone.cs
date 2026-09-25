@@ -76,19 +76,19 @@ internal static class Zone
     {
         get
         {
-            float value = 2f;
+            float value = Logic.ZoneMath.DefaultMultiplier;
             try { if (CfgMult != null) value = CfgMult.Value; } catch { }
-            if (!Finite((double)value)) value = 2f;
-            value = (float)Math.Round(value, MidpointRounding.AwayFromZero);
-            return Math.Max(1f, Math.Min(4f, value));
+            return Logic.ZoneMath.ClampMultiplier(value);
         }
     }
 
     internal static void Bind(ConfigFile config, ManualLogSource log)
     {
         Log = log;
-        CfgMult = config.Bind("Garage", "ZoneMultiplier", 2f,
-            "Garage build-volume width and depth scale as a whole number from 1 to 4; height stays vanilla and the area remains centered.");
+        CfgMult = config.Bind("Garage", "ZoneMultiplier", (float)Logic.ZoneMath.DefaultMultiplier,
+            new ConfigDescription("Garage build-area width and depth multiplier (whole number, 1-12). 12 = the yellow build border is 12x wider and 12x deeper; " +
+                "height stays vanilla, the area stays centered, the floor is tiled at native texture scale and surrounding station structures move out to the new border.",
+                new AcceptableValueRange<float>(1f, Logic.ZoneMath.MaxMultiplier)));
         CfgExpand = config.Bind("Garage", "EnableGarageExpansion", true,
             "Enable deferred garage floor/collider expansion only while the garage is active; planet scene loading never mutates station renderers.");
         CfgDiag = config.Bind("Garage", "DiagPlatforms", false,
@@ -99,10 +99,10 @@ internal static class Zone
     {
         try
         {
-            CfgMult.Value = 2f;
+            CfgMult.Value = Logic.ZoneMath.DefaultMultiplier;
             CfgExpand.Value = true;
             CfgDiag.Value = false;
-            Log.LogInfo("Garage: v2.20 config migrated (centered whole-number width/depth scaling, tiled floor meshes, registered static collision).");
+            Log.LogInfo($"Garage: v3 config migrated (x{Logic.ZoneMath.DefaultMultiplier} centered build area, tiled floor, perimeter relocation).");
         }
         catch (Exception e) { Warn($"Garage migration issue: {e.GetType().Name}: {e.Message}"); }
     }
@@ -111,6 +111,7 @@ internal static class Zone
     {
         try
         {
+            try { Perimeter.RestoreAll("session reset"); } catch { }
             foreach (var floor in FloorTransforms.Values) RestoreFloorVisual(floor, "session reset");
             foreach (var station in StationOriginals.Values)
             {
@@ -410,6 +411,8 @@ internal static class Zone
                     }
                     catch (Exception e) { FloorMessage(renderer, $"skipped: {e.GetType().Name}: {e.Message}"); }
                 }
+                try { Perimeter.Apply(station.Station, station.Min, station.Max, (int)multiplier, FloorEntities()); }
+                catch (Exception e) { Warn($"Garage perimeter skipped: {e.GetType().Name}: {e.Message}"); }
                 if (candidates == 0)
                 {
                     DestroyStationCollision(station);
@@ -522,7 +525,43 @@ internal static class Zone
         return Finite(determinant) && determinant != 0d && SameMatrix(matrix.inverse, matrix.inverse, 0f);
     }
 
-    private static Mesh BuildTiledMesh(Mesh source, int tiles)
+    /// <summary>
+    /// Tile spacing in mesh space. The vanilla floor can be several pieces (Garage50 A/B/C);
+    /// stepping every piece by the whole garage footprint repeats the complete vanilla floor
+    /// arrangement on a grid instead of overlapping single pieces.
+    /// </summary>
+    private static void FloorSteps(Unity.Entities.EntityManager em, StationState station, Unity.Transforms.LocalToWorld floorLtw, Mesh mesh,
+        out Vector3 stepX, out Vector3 stepZ)
+    {
+        var size = mesh.bounds.size;
+        stepX = new Vector3(size.x, 0f, 0f);
+        stepZ = new Vector3(0f, 0f, size.z);
+        try
+        {
+            if (!em.HasComponent<Unity.Transforms.LocalToWorld>(station.Station._entity)) return;
+            var stationM = Matrix(em.GetComponentData<Unity.Transforms.LocalToWorld>(station.Station._entity).Value);
+            var floorM = Matrix(floorLtw.Value);
+            if (!Invertible(stationM) || !Invertible(floorM)) return;
+            float3 footprint = station.Max - station.Min;
+            var inv = floorM.inverse;
+            var sx = inv.MultiplyVector(stationM.MultiplyVector(new Vector3(footprint.x, 0f, 0f)));
+            var sz = inv.MultiplyVector(stationM.MultiplyVector(new Vector3(0f, 0f, footprint.z)));
+            if (!Finite(sx) || !Finite(sz)) return;
+            stepX = sx;
+            stepZ = sz;
+        }
+        catch { }
+    }
+
+    private static List<Entity> FloorEntities()
+    {
+        var list = new List<Entity>();
+        foreach (var floor in FloorTransforms.Values) list.Add(floor.Entity);
+        foreach (var station in StationOriginals.Values) if (station.CollisionEntity != default) list.Add(station.CollisionEntity);
+        return list;
+    }
+
+    private static Mesh BuildTiledMesh(Mesh source, int tiles, Vector3 stepX, Vector3 stepZ)
     {
         Mesh target = null;
         try
@@ -541,8 +580,8 @@ internal static class Zone
                 source.GetUVs(channel, values);
                 sourceUv[channel] = values.Count == sourceVertices.Length ? values : null;
             }
+            if (!Logic.ZoneMath.TiledMeshFits(source.vertexCount, tiles, out bool needsUInt32)) return null;
             int totalVertices = source.vertexCount * tiles * tiles;
-            if (totalVertices <= 0 || totalVertices > 65535) return null;
             var vertices = new Il2CppSystem.Collections.Generic.List<Vector3>(totalVertices);
             var normals = sourceNormals != null && sourceNormals.Length == source.vertexCount ? new Il2CppSystem.Collections.Generic.List<Vector3>(totalVertices) : null;
             var tangents = sourceTangents != null && sourceTangents.Length == source.vertexCount ? new Il2CppSystem.Collections.Generic.List<Vector4>(totalVertices) : null;
@@ -550,17 +589,16 @@ internal static class Zone
             var uv = new Il2CppSystem.Collections.Generic.List<Vector4>[8];
             for (int channel = 0; channel < uv.Length; channel++)
                 if (sourceUv[channel] != null) uv[channel] = new Il2CppSystem.Collections.Generic.List<Vector4>(totalVertices);
-            float offsetX = sourceBounds.size.x;
-            float offsetZ = sourceBounds.size.z;
             for (int z = 0; z < tiles; z++)
             {
                 for (int x = 0; x < tiles; x++)
                 {
-                    float dx = (x - (tiles - 1) * 0.5f) * offsetX;
-                    float dz = (z - (tiles - 1) * 0.5f) * offsetZ;
+                    float fx = x - (tiles - 1) * 0.5f;
+                    float fz = z - (tiles - 1) * 0.5f;
+                    var offset = new Vector3(stepX.x * fx + stepZ.x * fz, stepX.y * fx + stepZ.y * fz, stepX.z * fx + stepZ.z * fz);
                     for (int i = 0; i < sourceVertices.Length; i++)
                     {
-                        vertices.Add(sourceVertices[i] + new Vector3(dx, 0f, dz));
+                        vertices.Add(sourceVertices[i] + offset);
                         normals?.Add(sourceNormals[i]);
                         tangents?.Add(sourceTangents[i]);
                         colors?.Add(sourceColors[i]);
@@ -569,6 +607,8 @@ internal static class Zone
                 }
             }
             target = new Mesh { name = source.name + " MorePlayersTiledX" + tiles, hideFlags = HideFlags.DontSave };
+            // 12x12 copies of the vanilla tile exceed 16-bit indices.
+            if (needsUInt32) target.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
             target.SetVertices(vertices);
             if (normals != null) target.SetNormals(normals);
             if (tangents != null) target.SetTangents(tangents);
@@ -720,11 +760,12 @@ internal static class Zone
             FloorTransforms.Remove(renderer.GetInstanceID());
             return;
         }
-        int tiles = Math.Max(1, Math.Min(4, (int)Math.Round(multiplier)));
+        int tiles = Logic.ZoneMath.ClampMultiplier(multiplier);
         if (floor.AppliedMesh == null || floor.Applied != multiplier)
         {
             if (floor.AppliedMesh != null) UnityEngine.Object.Destroy(floor.AppliedMesh);
-            floor.AppliedMesh = BuildTiledMesh(floor.OriginalMesh, tiles);
+            FloorSteps(em, station, localToWorld, floor.OriginalMesh, out var stepX, out var stepZ);
+            floor.AppliedMesh = BuildTiledMesh(floor.OriginalMesh, tiles, stepX, stepZ);
             if (floor.AppliedMesh == null)
             {
                 floor.Blocked = true;

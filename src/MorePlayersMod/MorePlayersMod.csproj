@@ -7,99 +7,65 @@
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <DebugType>none</DebugType>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
-    <Version>2.20.6</Version>
+    <Version>3.0.0</Version>
+    <NoWarn>$(NoWarn);CS0162;CS0414;CS0649;CS0169</NoWarn>
   </PropertyGroup>
 
+  <!--
+    Two build modes:
+      * GameDir set and containing BepInEx interop -> compile against the player's real game.
+      * otherwise                                   -> compile against ../../stubs (CI / no game).
+    Stubs are compile-only and never shipped.
+  -->
   <PropertyGroup>
-    <GameDir>D:\Torrent Games\Approximately Up\Approximately Up\Approximately Up</GameDir>
+    <GameDir Condition="'$(GameDir)' == ''">$(APPROXIMATELY_UP_DIR)</GameDir>
     <BepInExCore>$(GameDir)\BepInEx\core</BepInExCore>
     <BepInExInterop>$(GameDir)\BepInEx\interop</BepInExInterop>
+    <UseGameRefs Condition="'$(GameDir)' != '' And Exists('$(BepInExInterop)\Assembly-CSharp.dll')">true</UseGameRefs>
   </PropertyGroup>
 
-  <ItemGroup>
-    <Reference Include="BepInEx.Core">
-      <HintPath>$(BepInExCore)\BepInEx.Core.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="BepInEx.Unity.IL2CPP">
-      <HintPath>$(BepInExCore)\BepInEx.Unity.IL2CPP.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <!-- Game interop refs: only touched from Features/Contracts/CrewParts/Patches
-         (never from Plugin.Load directly) so a game update can only disable
-         the bonus modules, never the native cap unlock. -->
-    <Reference Include="0Harmony">
-      <HintPath>$(BepInExCore)\0Harmony.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Assembly-CSharp">
-      <HintPath>$(BepInExInterop)\Assembly-CSharp.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="UnityEngine.CoreModule">
-      <HintPath>$(BepInExInterop)\UnityEngine.CoreModule.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Il2Cppmscorlib">
-      <HintPath>$(BepInExInterop)\Il2Cppmscorlib.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Il2CppSystem">
-      <HintPath>$(BepInExInterop)\Il2CppSystem.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Il2CppSystem.Core">
-      <HintPath>$(BepInExInterop)\Il2CppSystem.Core.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Il2CppInterop.Runtime">
-      <HintPath>$(BepInExCore)\Il2CppInterop.Runtime.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Unity.Mathematics">
-      <HintPath>$(BepInExInterop)\Unity.Mathematics.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="UnityEngine.UI">
-      <HintPath>$(BepInExInterop)\UnityEngine.UI.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="UnityEngine.UIModule">
-      <HintPath>$(BepInExInterop)\UnityEngine.UIModule.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="UnityEngine.TextRenderingModule">
-      <HintPath>$(BepInExInterop)\UnityEngine.TextRenderingModule.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Unity.TextMeshPro">
-      <HintPath>$(BepInExInterop)\Unity.TextMeshPro.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Unity.Entities">
-      <HintPath>$(BepInExInterop)\Unity.Entities.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Unity.Physics">
-      <HintPath>$(BepInExInterop)\Unity.Physics.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Unity.Mathematics.Extensions">
-      <HintPath>$(BepInExInterop)\Unity.Mathematics.Extensions.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Unity.Transforms">
-      <HintPath>$(BepInExInterop)\Unity.Transforms.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Unity.Collections">
-      <HintPath>$(BepInExInterop)\Unity.Collections.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
+  <ItemGroup Condition="'$(UseGameRefs)' == 'true'">
+    <Reference Include="$(BepInExCore)\BepInEx.Core.dll" Private="false" />
+    <Reference Include="$(BepInExCore)\BepInEx.Unity.IL2CPP.dll" Private="false" />
+    <Reference Include="$(BepInExCore)\BepInEx.Unity.Common.dll" Private="false" Condition="Exists('$(BepInExCore)\BepInEx.Unity.Common.dll')" />
+    <Reference Include="$(BepInExCore)\0Harmony.dll" Private="false" />
+    <Reference Include="$(BepInExCore)\Il2CppInterop.Runtime.dll" Private="false" />
+    <Reference Include="$(BepInExCore)\Il2CppInterop.Common.dll" Private="false" Condition="Exists('$(BepInExCore)\Il2CppInterop.Common.dll')" />
+    <Reference Include="$(BepInExInterop)\Assembly-CSharp.dll" Private="false" />
+    <Reference Include="$(BepInExInterop)\Il2Cppmscorlib.dll" Private="false" />
+    <Reference Include="$(BepInExInterop)\UnityEngine.CoreModule.dll" Private="false" />
+    <Reference Include="$(BepInExInterop)\UnityEngine.UIModule.dll" Private="false" />
+    <Reference Include="$(BepInExInterop)\UnityEngine.UI.dll" Private="false" />
+    <Reference Include="$(BepInExInterop)\UnityEngine.InputLegacyModule.dll" Private="false" />
+    <Reference Include="$(BepInExInterop)\UnityEngine.TextRenderingModule.dll" Private="false" />
+    <Reference Include="$(BepInExInterop)\Unity.Mathematics.dll" Private="false" />
+    <Reference Include="$(BepInExInterop)\Unity.Mathematics.Extensions.dll" Private="false" />
+    <Reference Include="$(BepInExInterop)\Unity.Entities.dll" Private="false" />
+    <Reference Include="$(BepInExInterop)\Unity.Collections.dll" Private="false" />
+    <Reference Include="$(BepInExInterop)\Unity.Transforms.dll" Private="false" />
+    <Reference Include="$(BepInExInterop)\Unity.Physics.dll" Private="false" />
   </ItemGroup>
 
-  <Target Name="DeployToPlugins" AfterTargets="Build" Condition="'$(DeployMod)' == 'true'">
+  <ItemGroup Condition="'$(UseGameRefs)' != 'true'">
+    <PackageReference Include="BepInEx.Unity.IL2CPP" Version="6.0.0-be.735" PrivateAssets="all" ExcludeAssets="runtime" />
+    <ProjectReference Include="..\..\stubs\Assembly-CSharp\Assembly-CSharp.csproj" Private="false" />
+    <ProjectReference Include="..\..\stubs\Il2Cppmscorlib\Il2Cppmscorlib.csproj" Private="false" />
+    <ProjectReference Include="..\..\stubs\UnityEngine.CoreModule\UnityEngine.CoreModule.csproj" Private="false" />
+    <ProjectReference Include="..\..\stubs\UnityEngine.UIModule\UnityEngine.UIModule.csproj" Private="false" />
+    <ProjectReference Include="..\..\stubs\UnityEngine.UI\UnityEngine.UI.csproj" Private="false" />
+    <ProjectReference Include="..\..\stubs\UnityEngine.InputLegacyModule\UnityEngine.InputLegacyModule.csproj" Private="false" />
+    <ProjectReference Include="..\..\stubs\UnityEngine.TextRenderingModule\UnityEngine.TextRenderingModule.csproj" Private="false" />
+    <ProjectReference Include="..\..\stubs\Unity.Mathematics\Unity.Mathematics.csproj" Private="false" />
+    <ProjectReference Include="..\..\stubs\Unity.Mathematics.Extensions\Unity.Mathematics.Extensions.csproj" Private="false" />
+    <ProjectReference Include="..\..\stubs\Unity.Entities\Unity.Entities.csproj" Private="false" />
+    <ProjectReference Include="..\..\stubs\Unity.Collections\Unity.Collections.csproj" Private="false" />
+    <ProjectReference Include="..\..\stubs\Unity.Transforms\Unity.Transforms.csproj" Private="false" />
+    <ProjectReference Include="..\..\stubs\Unity.Physics\Unity.Physics.csproj" Private="false" />
+  </ItemGroup>
+
+  <Target Name="DeployToPlugins" AfterTargets="Build" Condition="'$(DeployMod)' == 'true' And '$(UseGameRefs)' == 'true'">
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(GameDir)\BepInEx\plugins\" SkipUnchangedFiles="false" />
     <Message Importance="high" Text="Deployed $(TargetFileName) to BepInEx/plugins" />
   </Target>

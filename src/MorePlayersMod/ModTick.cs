@@ -29,13 +29,21 @@ internal static class ModTick
             if (!s_aliveLogged)
             {
                 s_aliveLogged = true;
-                try { Log?.LogInfo("Manager tick alive; garage lifecycle capture and coherent placement restoration are active."); } catch { }
+                try { Log?.LogInfo("Manager tick alive: garage expansion, placement restore, lobby cap, colours and Frontier simulation running."); } catch { }
             }
             ExtendedTransformStore.Tick();
+            try { FrontierRuntime.Tick(); } catch { }
+            try { LobbyCap.Tick(); } catch { }
             unchecked { s_frames++; }
+            if ((s_frames % 30) == 0)
+            {
+                try { PlayerColors.EnsureExtended(); } catch { }
+                try { Contracts.TickRefresh(); } catch { }
+            }
             if ((s_frames % 90) == 0)
             {
                 try { Zone.EnsureScaled(); } catch { }
+                try { Zone.ApplyRootAtRuntime(); } catch { }
                 try { Zone.ScaleBoundaryVisuals(); } catch { }
             }
             if ((s_frames % 450) == 0)

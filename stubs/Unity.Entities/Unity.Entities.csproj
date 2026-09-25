@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>Unity.Entities</AssemblyName>
+    <AssemblyVersion>0.0.0.0</AssemblyVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Il2Cppmscorlib\Il2Cppmscorlib.csproj" />
+    <ProjectReference Include="..\UnityEngine.CoreModule\UnityEngine.CoreModule.csproj" />
+    <ProjectReference Include="..\Unity.Collections\Unity.Collections.csproj" />
+  </ItemGroup>
+</Project>

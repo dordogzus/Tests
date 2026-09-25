@@ -74,7 +74,7 @@ function Find-GameRoot([string]$StartDir) {
     return $null
 }
 
-Write-Title 'More Players v2.20.6 - automatic build + replace'
+Write-Title 'More Players v3.0.0 - automatic build + replace'
 
 $start = Normalize-DroppedPath $DroppedPath
 $gameDir = Find-GameRoot $start
@@ -176,9 +176,10 @@ if (Test-Path -LiteralPath $chainloaderCache) {
 
 Write-Title 'DONE'
 Write-Host "Installed : $destDll" -ForegroundColor Green
-Write-Host "Version   : 2.20.6" -ForegroundColor Green
+Write-Host "Version   : 3.0.0" -ForegroundColor Green
 Write-Host "Config    : preserved (nothing in BepInEx\config was replaced)" -ForegroundColor Green
 Write-Host "SHA-256   : $dstHash" -ForegroundColor DarkGray
 Write-Host ""
-Write-Host "Launch the game and test parts outside the original yellow build square." -ForegroundColor Yellow
+Write-Host "Launch the game: F6 = crew roster, F7 = Frontier HUD." -ForegroundColor Yellow
+Write-Host "Every player should install the same version; the host's MaxPlayers decides the lobby size." -ForegroundColor Yellow
 exit 0

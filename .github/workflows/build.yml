@@ -1,0 +1,22 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Build (against compile-only stubs)
+        run: dotnet build MorePlayersMod.sln -c Release
+      - name: Test
+        run: dotnet test tests/MorePlayersMod.Tests -c Release --no-build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MorePlayersMod-stub-build
+          path: src/MorePlayersMod/bin/Release/net6.0/MorePlayersMod.dll
