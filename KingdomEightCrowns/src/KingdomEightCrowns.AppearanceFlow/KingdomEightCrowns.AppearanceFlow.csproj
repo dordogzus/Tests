@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>KingdomEightCrowns.AppearanceFlow</AssemblyName>
+    <RootNamespace>KingdomEightCrowns.AppearanceFlow</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Remove="kc8_scrollbar_track.png;kc8_scrollbar_thumb.png" />
+    <EmbeddedResource Include="kc8_scrollbar_track.png" LogicalName="kc8_scrollbar_track.png" />
+    <EmbeddedResource Include="kc8_scrollbar_thumb.png" LogicalName="kc8_scrollbar_thumb.png" />
+  </ItemGroup>
+</Project>

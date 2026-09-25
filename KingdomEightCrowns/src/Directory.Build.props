@@ -1,0 +1,31 @@
+<Project>
+  <!-- BepInEx 6 be.753 IL2CPP toolchain. The DLLs are downloaded from NuGet and referenced
+       directly so the plugins can keep the original netstandard2.1 target. -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>12.0</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <Deterministic>true</Deterministic>
+    <DebugType>none</DebugType>
+    <NoWarn>$(NoWarn);CS1701;CS1702;CS1705;CS0162;CS0168;CS0219;CS0414;CS0649;CS8632</NoWarn>
+    <BepInExVersion>6.0.0-be.753</BepInExVersion>
+    <Il2CppInteropVersion>1.5.0-ci.620</Il2CppInteropVersion>
+    <HarmonyXVersion>2.10.2</HarmonyXVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageDownload Include="BepInEx.Core" Version="[$(BepInExVersion)]" />
+    <PackageDownload Include="BepInEx.Unity.IL2CPP" Version="[$(BepInExVersion)]" />
+    <PackageDownload Include="BepInEx.Unity.Common" Version="[$(BepInExVersion)]" />
+    <PackageDownload Include="HarmonyX" Version="[$(HarmonyXVersion)]" />
+    <PackageDownload Include="Il2CppInterop.Runtime" Version="[$(Il2CppInteropVersion)]" />
+    <PackageDownload Include="Il2CppInterop.Common" Version="[$(Il2CppInteropVersion)]" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="BepInEx.Core" HintPath="$(NuGetPackageRoot)bepinex.core/$(BepInExVersion)/lib/netstandard2.0/BepInEx.Core.dll" Private="false" />
+    <Reference Include="BepInEx.Unity.IL2CPP" HintPath="$(NuGetPackageRoot)bepinex.unity.il2cpp/$(BepInExVersion)/lib/net6.0/BepInEx.Unity.IL2CPP.dll" Private="false" />
+    <Reference Include="BepInEx.Unity.Common" HintPath="$(NuGetPackageRoot)bepinex.unity.common/$(BepInExVersion)/lib/netstandard2.0/BepInEx.Unity.Common.dll" Private="false" />
+    <Reference Include="0Harmony" HintPath="$(NuGetPackageRoot)harmonyx/$(HarmonyXVersion)/lib/netstandard2.0/0Harmony.dll" Private="false" />
+    <Reference Include="Il2CppInterop.Common" HintPath="$(NuGetPackageRoot)il2cppinterop.common/$(Il2CppInteropVersion)/lib/netstandard2.0/Il2CppInterop.Common.dll" Private="false" />
+  </ItemGroup>
+</Project>
