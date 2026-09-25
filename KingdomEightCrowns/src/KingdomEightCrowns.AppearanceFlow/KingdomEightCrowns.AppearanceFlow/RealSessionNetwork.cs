@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Text;
 using BepInEx.Logging;
 using HarmonyLib;
 
@@ -54,6 +55,12 @@ internal static class RealSessionNetwork
 		internal object LastMonarch { get; set; }
 
 		internal object LatestModel { get; set; }
+
+		// The host's real Player 2 model, saved while a Player 3+ selection runs through the stock
+		// Player 2 selector (which writes the pick into p2Model).
+		internal object SavedHostP2Model { get; set; }
+
+		internal object SavedHostP2Monarch { get; set; }
 
 		internal PeerState(object connection, int playerId, int bodyNetId, object peerToken, string description)
 		{
@@ -191,6 +198,30 @@ internal static class RealSessionNetwork
 	private const int AssignmentMask = -16777216;
 
 	private const int MaximumPlayers = 8;
+
+	// Session capacity from the core's [Multiplayer] MaxPlayers (the constants above are the hard 8-slot limit).
+	private static int _maxPlayers = 8;
+
+	private static int MaxRemotePlayers => Math.Max(1, _maxPlayers - 1);
+
+	private static MethodInfo _isSlotCommitted;
+
+	// Set while the host pump is inside the native Receive of one packet.
+	private static bool _insidePump;
+
+	private static bool _packetCarriedModel;
+
+	private static object _relaySendType;
+
+	private static readonly Dictionary<string, Type> LoadedTypeCache = new Dictionary<string, Type>(StringComparer.Ordinal);
+
+	private static readonly Dictionary<(Type, string), MemberInfo> ReadMemberCache = new Dictionary<(Type, string), MemberInfo>();
+
+	private static readonly Dictionary<(Type, string), MemberInfo> WriteMemberCache = new Dictionary<(Type, string), MemberInfo>();
+
+	private static MethodInfo _unityObjectEquality;
+
+	private static MethodInfo _unityObjectDestroy;
 
 	private const int RosterScrollWindow = 2;
 
@@ -456,7 +487,7 @@ internal static class RealSessionNetwork
 
 	private const string BadgeTextMarker = "KINGDOM EIGHT CROWNS";
 
-	private static readonly string BadgeVersionTag = "(A" + "0.14.20-alpha".Replace("-alpha", string.Empty) + ")";
+	private static readonly string BadgeVersionTag = "(A" + "0.14.21-alpha".Replace("-alpha", string.Empty) + ")";
 
 	private static readonly string RichBadgeSuffix = "\nKINGDOM EIGHT CROWNS <color=#F7F7FC21>" + BadgeVersionTag + "</color>";
 
@@ -584,7 +615,8 @@ internal static class RealSessionNetwork
 
 	internal static void Install(Harmony harmony)
 	{
-		NativeLobbyCapacity.Apply(8);
+		_maxPlayers = ReadCoreMaxPlayers();
+		NativeLobbyCapacity.Apply(_maxPlayers);
 		Type type = RequireGameType("SteamNetworkConnection");
 		Type type2 = RequireGameType("UNetRouter");
 		Type type3 = RequireGameType("NetworkPostbox");
@@ -671,12 +703,15 @@ internal static class RealSessionNetwork
 			ParameterInfo[] parameters = method.GetParameters();
 			return method.IsStatic && parameters.Length == 3 && parameters[0].ParameterType == _playerModelType && parameters[1].ParameterType == typeof(int);
 		});
+		_isSlotCommitted = _appearanceRegistryType.GetMethod("IsCommitted", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null, new Type[1] { typeof(int) }, null);
 		_getSystemLanguage = FindOptionalUnique(_languageType, "GetSystemLanguage", (MethodInfo method) => method.IsStatic && method.GetParameters().Length == 0, "roster language lookup");
 		_isNetworkingPanelOpen = FindOptionalUnique(_menuType, "IsNetworkingPanelOpen", (MethodInfo method) => !method.IsStatic && method.ReturnType == typeof(bool) && method.GetParameters().Length == 0, "Online-panel visibility lookup");
 		_localUsername = FindOptionalUnique(_steamPlatformManagerType, "LocalUsername", (MethodInfo method) => !method.IsStatic && method.ReturnType == typeof(string) && method.GetParameters().Length == 0, "local roster-name fallback");
 		_remoteUsername = FindOptionalUnique(_steamPlatformManagerType, "RemoteUsername", (MethodInfo method) => !method.IsStatic && method.ReturnType == typeof(string) && method.GetParameters().Length == 0, "remote roster-name fallback");
 		Patch(harmony, original, null, "AfterSteamSetTargetId");
-		Patch(harmony, _steamReceive, "BeforeSteamReceive", "AfterSteamReceive");
+		// State-restoring hooks are finalizers: a postfix is skipped when the native method throws, which
+		// used to leave the router routed to one peer for the rest of the session.
+		Patch(harmony, _steamReceive, "BeforeSteamReceive", null, "AfterSteamReceive");
 		Patch(harmony, _steamPollMessages, "BeforeSteamPollMessages", "AfterSteamPollMessages");
 		Patch(harmony, _steamSend, "BeforeSteamSend", "AfterSteamSend");
 		Patch(harmony, _steamDispose, "BeforeSteamDispose", null);
@@ -689,11 +724,11 @@ internal static class RealSessionNetwork
 		Patch(harmony, methodInfo3, null, "AfterCreateCatchupIterator");
 		Patch(harmony, methodInfo4, null, "AfterCreateCatchupIterator");
 		Patch(harmony, methodInfo5, null, "AfterCreateCatchupIterator");
-		Patch(harmony, original7, "BeforeCatchupMoveNext", "AfterCatchupMoveNext");
-		Patch(harmony, original8, "BeforeCatchupMoveNext", "AfterCatchupMoveNext");
-		Patch(harmony, original9, "BeforeCatchupMoveNext", "AfterCatchupMoveNext");
-		Patch(harmony, original10, "BeforeCatchupMoveNext", "AfterCatchupMoveNext");
-		Patch(harmony, original11, "BeforeCatchupMoveNext", "AfterCatchupMoveNext");
+		Patch(harmony, original7, "BeforeCatchupMoveNext", null, "AfterCatchupMoveNext");
+		Patch(harmony, original8, "BeforeCatchupMoveNext", null, "AfterCatchupMoveNext");
+		Patch(harmony, original9, "BeforeCatchupMoveNext", null, "AfterCatchupMoveNext");
+		Patch(harmony, original10, "BeforeCatchupMoveNext", null, "AfterCatchupMoveNext");
+		Patch(harmony, original11, "BeforeCatchupMoveNext", null, "AfterCatchupMoveNext");
 		Patch(harmony, original12, "BeforeSetClientConnecting", null);
 		Patch(harmony, _clientHandleOnConnect, "BeforeClientHandleOnConnect", null);
 		Patch(harmony, original4, null, "AfterClientHandleOnDisconnect");
@@ -703,7 +738,7 @@ internal static class RealSessionNetwork
 		Patch(harmony, FindUnique(type2, "Server_HandleOnDisconnect", (MethodInfo method) => method.GetParameters().Length == 0), "BeforeServerHandleOnDisconnect", null);
 		Patch(harmony, FindUnique(type2, "RecvClientHandshake", (MethodInfo method) => method.GetParameters().Length == 1), "BeforeRecvClientHandshake", null);
 		Patch(harmony, FindUnique(type2, "RecvAllowPlayerReroll", (MethodInfo method) => method.GetParameters().Length == 1), "BeforeRecvAllowPlayerReroll", null);
-		Patch(harmony, FindUnique(type2, "RecvP2SelectSkin", (MethodInfo method) => method.GetParameters().Length == 1), "BeforeRecvP2SelectSkin", "AfterRecvP2SelectSkin");
+		Patch(harmony, FindUnique(type2, "RecvP2SelectSkin", (MethodInfo method) => method.GetParameters().Length == 1), "BeforeRecvP2SelectSkin", "AfterRecvP2SelectSkin", "FinallyRecvP2SelectSkin");
 		Patch(harmony, FindUnique(type2, "SendPlayerData", (MethodInfo method) => method.GetParameters().Length == 0), "BeforeSendPlayerData", "AfterSendPlayerData");
 		Patch(harmony, FindUnique(_skinSelectMessageType, "Deserialize", (MethodInfo method) => method.GetParameters().Length == 1), null, "AfterSkinSelectMessageDeserialize");
 		Patch(harmony, FindUnique(_playerModelMessageType, "Serialize", (MethodInfo method) => method.GetParameters().Length == 1), "BeforePlayerModelMessageSerialize", "AfterPlayerModelMessageSerialize");
@@ -845,11 +880,16 @@ internal static class RealSessionNetwork
 		{
 			_overlayInstance = __instance;
 			bool flag = false;
+			lock (Gate)
+			{
+				// Keep only live counters; wrappers of destroyed labels used to pile up and be walked every frame.
+				WatchedCounterTexts.RemoveWhere((object watched) => !IsUnityAlive(watched));
+			}
 			string[] array = new string[2] { "dayCounter", "gameOverDays" };
 			foreach (string name in array)
 			{
 				object obj = ReadMember(__instance, name);
-				if (obj != null)
+				if (obj != null && !IsWatchedCounter(obj))
 				{
 					lock (Gate)
 					{
@@ -875,12 +915,9 @@ internal static class RealSessionNetwork
 			{
 				return;
 			}
-			lock (Gate)
+			if (!IsWatchedCounter(__instance))
 			{
-				if (!WatchedCounterTexts.Contains(__instance))
-				{
-					return;
-				}
+				return;
 			}
 			object obj = ResolveCounterLegacyFont();
 			if (obj == null)
@@ -915,12 +952,9 @@ internal static class RealSessionNetwork
 			{
 				return;
 			}
-			lock (Gate)
+			if (!IsWatchedCounter(__instance))
 			{
-				if (!WatchedCounterTexts.Contains(__instance))
-				{
-					return;
-				}
+				return;
 			}
 			_insideCounterStyleRewrite = true;
 			try
@@ -945,12 +979,9 @@ internal static class RealSessionNetwork
 			{
 				return;
 			}
-			lock (Gate)
+			if (!IsWatchedCounter(__instance))
 			{
-				if (!WatchedCounterTexts.Contains(__instance))
-				{
-					return;
-				}
+				return;
 			}
 			_insideCounterStyleRewrite = true;
 			try
@@ -1185,12 +1216,18 @@ internal static class RealSessionNetwork
 	{
 		try
 		{
-			if (_insideUITextRewrite || string.IsNullOrEmpty(value) || value.Length > 8)
+			if (_insideUITextRewrite || string.IsNullOrEmpty(value) || value.Length > 15)
 			{
 				return;
 			}
 			int num = ParseRomanNumeral(value);
 			if (num <= 0)
+			{
+				return;
+			}
+			// This prefix sees every UI text in the game: only the day counters may be rewritten and restyled
+			// (it used to turn labels such as "I", "Mix" or "DLC" into numbers and change their font).
+			if (!IsWatchedCounter(__instance))
 			{
 				return;
 			}
@@ -1230,16 +1267,13 @@ internal static class RealSessionNetwork
 	{
 		try
 		{
-			if (_insideUITextRewrite || string.IsNullOrEmpty(value) || value.Length > 8)
+			if (_insideUITextRewrite || string.IsNullOrEmpty(value) || value.Length > 15)
 			{
 				return;
 			}
-			lock (Gate)
+			if (!IsWatchedCounter(__instance))
 			{
-				if (!WatchedCounterTexts.Contains(__instance))
-				{
-					return;
-				}
+				return;
 			}
 			if (LoggedCounterSamples < 6)
 			{
@@ -1287,11 +1321,11 @@ internal static class RealSessionNetwork
 
 	private static int ParseRomanNumeral(string value)
 	{
-		if (string.IsNullOrEmpty(value))
+		// Case-sensitive and canonical only: the counter prints upper-case numerals.
+		if (string.IsNullOrEmpty(value) || value.Length > 15)
 		{
 			return 0;
 		}
-		value = value.ToUpperInvariant();
 		if (!IsRomanNumeral(value))
 		{
 			return 0;
@@ -1325,11 +1359,62 @@ internal static class RealSessionNetwork
 				num2 = num4;
 			}
 		}
-		if (num <= 0 || num >= 10000)
+		if (num <= 0 || num >= 4000 || !string.Equals(ToRomanNumeral(num), value, StringComparison.Ordinal))
 		{
 			return 0;
 		}
 		return num;
+	}
+
+	private static string ToRomanNumeral(int number)
+	{
+		int[] values = new int[13] { 1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1 };
+		string[] symbols = new string[13] { "M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I" };
+		StringBuilder builder = new StringBuilder();
+		for (int i = 0; i < values.Length; i++)
+		{
+			while (number >= values[i])
+			{
+				builder.Append(symbols[i]);
+				number -= values[i];
+			}
+		}
+		return builder.ToString();
+	}
+
+	private static bool IsWatchedCounter(object instance)
+	{
+		if (instance == null)
+		{
+			return false;
+		}
+		object[] watched;
+		lock (Gate)
+		{
+			if (WatchedCounterTexts.Count == 0)
+			{
+				return false;
+			}
+			if (WatchedCounterTexts.Contains(instance))
+			{
+				return true;
+			}
+			watched = WatchedCounterTexts.ToArray();
+		}
+		// Wrapper identity is not guaranteed across Il2Cpp calls; compare the native objects.
+		IntPtr pointer = TryReadNativePointer(instance);
+		if (pointer == IntPtr.Zero)
+		{
+			return false;
+		}
+		foreach (object candidate in watched)
+		{
+			if (TryReadNativePointer(candidate) == pointer)
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static void ShowVersionBadge(object menu)
@@ -2034,8 +2119,7 @@ internal static class RealSessionNetwork
 	{
 		try
 		{
-			return ((from assembly in AppDomain.CurrentDomain.GetAssemblies()
-				select assembly.GetType("Il2CppInterop.Runtime.Il2CppType")).FirstOrDefault((Type type) => type != null)?.GetMethods(BindingFlags.Static | BindingFlags.Public).FirstOrDefault(delegate(MethodInfo method)
+			return (FindLoadedType("Il2CppInterop.Runtime.Il2CppType")?.GetMethods(BindingFlags.Static | BindingFlags.Public).FirstOrDefault(delegate(MethodInfo method)
 			{
 				if (method.Name != "From" || method.IsGenericMethod)
 				{
@@ -2161,7 +2245,7 @@ internal static class RealSessionNetwork
 			{
 				_activeCatchupConnection = __instance;
 			}
-			Plugin.LogSource.LogWarning("[Dynamic session] Accepted " + peerState.Description + " as Player " + (num2 + 1) + " with body NetID " + bodyNetId + " on transport " + DescribeTransport(__instance) + ". Occupied players=" + (HostPeers.Count + 1) + "/8; stage=accepted-awaiting-first-packet.");
+			Plugin.LogSource.LogWarning("[Dynamic session] Accepted " + peerState.Description + " as Player " + (num2 + 1) + " with body NetID " + bodyNetId + " on transport " + DescribeTransport(__instance) + ". Occupied players=" + (HostPeers.Values.Distinct().Count() + 1) + "/" + _maxPlayers + "; stage=accepted-awaiting-first-packet.");
 		}
 		RefreshCurrentMenu();
 	}
@@ -2263,9 +2347,9 @@ internal static class RealSessionNetwork
 				reconnectingPeer = ((acceptingPeerToken == null) ? HostPeers.Values.FirstOrDefault((PeerState peer) => ConnectionsEqual(peer.Connection, incoming)) : FindPeerByTokenUnsafe(acceptingPeerToken));
 				flag = HostPeers.Values.Any((PeerState peer) => peer.CatchupPending && peer != reconnectingPeer);
 			}
-			if (num >= 7 && reconnectingPeer == null)
+			if (num >= MaxRemotePlayers && reconnectingPeer == null)
 			{
-				RejectCurrentRegistration(incoming, "the eight-player session is full");
+				RejectCurrentRegistration(incoming, "the " + _maxPlayers + "-player session is full");
 				return;
 			}
 			if (flag)
@@ -2338,11 +2422,19 @@ internal static class RealSessionNetwork
 				{
 					return true;
 				}
-				peers = (from peer in HostPeers.Values
+				peers = (from peer in HostPeers.Values.Distinct()
 					orderby peer.PlayerId
 					select peer.Connection).ToArray();
 			}
-			PumpSteamPackets(peers);
+			try
+			{
+				PumpSteamPackets(peers);
+			}
+			catch (Exception exception2)
+			{
+				LogFaultOnce("multi-peer Steam packet pump", exception2);
+			}
+			// Flush even when the pump faulted, so one bad packet cannot stall every peer's outgoing traffic.
 			FlushSteamPeerQueues(peers);
 			if (!_packetPumpReadyLogged)
 			{
@@ -2365,27 +2457,42 @@ internal static class RealSessionNetwork
 			{
 				continue;
 			}
-			short num = Convert.ToInt16(ReadMember(obj, "_numMessages"));
-			int num2 = Convert.ToInt32(ReadMember(obj, "_messageGroupSize"));
-			if (num > 0 && num2 > 2)
+			try
 			{
-				object obj2 = ReadMember(obj, "_outgoingDataBuffer");
-				object obj3 = ReadMember(obj, "_targetID");
-				if (obj2 == null || obj3 == null)
-				{
-					throw new InvalidOperationException("A queued Steam peer is missing its outgoing buffer or target.");
-				}
-				if (!Convert.ToBoolean(_steamFlush.Invoke(obj, new object[3] { obj2, num2, obj3 })))
-				{
-					throw new IOException("Steam rejected a queued peer buffer containing " + num + " message(s) and " + num2 + " bytes.");
-				}
-				PeerState peerState = FindPeerByConnection(obj);
-				if (peerState != null && peerState.BootstrapRouteLogged && !peerState.BootstrapFlushedLogged)
-				{
-					peerState.BootstrapFlushedLogged = true;
-					Plugin.LogSource.LogWarning("[Dynamic session] Flushed Player " + (peerState.PlayerId + 1) + "'s queued native bootstrap through that player's own Steam target (messages=" + num + ", bytes=" + num2 + ").");
-				}
+				FlushSteamPeerQueue(obj);
 			}
+			catch (Exception exception)
+			{
+				// A failing peer must not keep the peers after it from being flushed.
+				PeerState failed = FindPeerByConnection(obj);
+				LogFaultOnce("outgoing flush for Player " + ((failed == null) ? "?" : (failed.PlayerId + 1).ToString()), exception);
+			}
+		}
+	}
+
+	private static void FlushSteamPeerQueue(object obj)
+	{
+		short num = Convert.ToInt16(ReadMember(obj, "_numMessages"));
+		int num2 = Convert.ToInt32(ReadMember(obj, "_messageGroupSize"));
+		if (num <= 0 || num2 <= 2)
+		{
+			return;
+		}
+		object obj2 = ReadMember(obj, "_outgoingDataBuffer");
+		object obj3 = ReadMember(obj, "_targetID");
+		if (obj2 == null || obj3 == null)
+		{
+			throw new InvalidOperationException("A queued Steam peer is missing its outgoing buffer or target.");
+		}
+		if (!Convert.ToBoolean(_steamFlush.Invoke(obj, new object[3] { obj2, num2, obj3 })))
+		{
+			throw new IOException("Steam rejected a queued peer buffer containing " + num + " message(s) and " + num2 + " bytes.");
+		}
+		PeerState peerState = FindPeerByConnection(obj);
+		if (peerState != null && peerState.BootstrapRouteLogged && !peerState.BootstrapFlushedLogged)
+		{
+			peerState.BootstrapFlushedLogged = true;
+			Plugin.LogSource.LogWarning("[Dynamic session] Flushed Player " + (peerState.PlayerId + 1) + "'s queued native bootstrap through that player's own Steam target (messages=" + num + ", bytes=" + num2 + ").");
 		}
 	}
 
@@ -2456,16 +2563,44 @@ internal static class RealSessionNetwork
 			{
 				Plugin.LogSource.LogWarning("[Dynamic session] Player " + (peerState.PlayerId + 1) + " inbound traffic sample: " + peerState.ReceivedPackets + " native packet(s) processed from that peer.");
 			}
+			// Readiness is sampled before Receive: the packet carrying ClientReady must not be relayed as live traffic.
+			bool sourceWasReady;
+			lock (Gate)
+			{
+				sourceWasReady = !peerState.CatchupPending;
+			}
+			object previousReceiving = _receivingConnection;
+			_packetCarriedModel = false;
+			_insidePump = true;
 			RouterScopeState state = BeginHostPeerScope(peerState);
 			try
 			{
 				_steamReceive.Invoke(peerState.Connection, new object[2] { obj, num2 });
 			}
+			catch (Exception exception)
+			{
+				// One faulting packet must not abort the pump for every other peer.
+				LogFaultOnce("native receive from Player " + (peerState.PlayerId + 1), exception);
+			}
 			finally
 			{
+				_insidePump = false;
+				_receivingConnection = previousReceiving;
 				EndHostPeerScope(state);
 			}
-			RelayPacketToReadyPeers(peerState, obj, num2);
+			if (_packetCarriedModel)
+			{
+				// The host already forwarded a validated copy of this ruler model; relaying the raw packet too
+				// delivered it twice (and echoed it back), re-running the model attach on live clones.
+				if (LoggedRelayRoutes.Add("model-packet:" + peerState.PlayerId))
+				{
+					Plugin.LogSource.LogWarning("[Relay] Player " + (peerState.PlayerId + 1) + "'s ruler-model packet was forwarded once as a validated copy instead of a raw relay.");
+				}
+			}
+			else if (sourceWasReady)
+			{
+				RelayPacketToReadyPeers(peerState, obj, num2);
+			}
 		}
 	}
 
@@ -2485,7 +2620,8 @@ internal static class RealSessionNetwork
 		PeerState[] array;
 		lock (Gate)
 		{
-			array = (from target in HostPeers.Values
+			// Distinct: a rebound peer can sit under two connection keys and was relayed every packet twice.
+			array = (from target in HostPeers.Values.Distinct()
 				where target != source && !target.CatchupPending && target.Connection != null
 				orderby target.PlayerId
 				select target).ToArray();
@@ -2498,15 +2634,22 @@ internal static class RealSessionNetwork
 				object obj = ReadMember(peerState.Connection, "_targetID");
 				if (obj != null)
 				{
-					Type parameterType = _sendP2PPacket.GetParameters()[3].ParameterType;
-					Convert.ToBoolean(_sendP2PPacket.Invoke(null, new object[5]
+					if (_relaySendType == null)
+					{
+						_relaySendType = Enum.ToObject(_sendP2PPacket.GetParameters()[3].ParameterType, 2);
+					}
+					bool sent = Convert.ToBoolean(_sendP2PPacket.Invoke(null, new object[5]
 					{
 						obj,
 						buffer,
 						(uint)bytesRead,
-						Enum.ToObject(parameterType, 2),
+						_relaySendType,
 						0
 					}));
+					if (!sent && LoggedRelayRoutes.Add("refused:" + source.PlayerId + "->" + peerState.PlayerId))
+					{
+						Plugin.LogSource.LogWarning("[Relay] Steam refused a relayed packet from Player " + (source.PlayerId + 1) + " to Player " + (peerState.PlayerId + 1) + ".");
+					}
 					string item = source.PlayerId + "->" + peerState.PlayerId;
 					if (LoggedRelayRoutes.Add(item))
 					{
@@ -2517,7 +2660,7 @@ internal static class RealSessionNetwork
 			catch (Exception exception)
 			{
 				LogFaultOnce("packet relay", exception);
-				break;
+				// Keep relaying to the remaining peers.
 			}
 		}
 	}
@@ -2692,6 +2835,14 @@ internal static class RealSessionNetwork
 		{
 			lock (Gate)
 			{
+				if (!peerState.CatchupPending)
+				{
+					// A ready player asking for catch-up again (e.g. after a level load) starts a new join
+					// window; the original accept time used to make the watchdog kick it within a second.
+					long now = Stopwatch.GetTimestamp();
+					peerState.AcceptedAt = now;
+					peerState.LastPacketAt = now;
+				}
 				peerState.CatchupPending = true;
 				peerState.CatchupRequestedAt = Stopwatch.GetTimestamp();
 				_activeCatchupConnection = peerState.Connection;
@@ -2825,7 +2976,9 @@ internal static class RealSessionNetwork
 				}
 			}
 			Plugin.LogSource.LogWarning("[Dynamic session] Player " + (peer.PlayerId + 1) + " completed native world catch-up and entered the ready live-traffic set (SteamId=" + DescribePeerToken(peer.PeerToken) + ", transport=" + DescribeTransport(peer.Connection) + ").");
-			object[] array4 = ReadAllSlots();
+			// Only network-delivered rulers, and never the joiner's own slot (it used to receive the host's
+			// placeholder for itself and wear Player 2's look).
+			object[] array4 = ReadCommittedSlotsExcept(peer.PlayerId);
 			object[] array5 = array4;
 			foreach (object model in array5)
 			{
@@ -2922,7 +3075,7 @@ internal static class RealSessionNetwork
 			{
 				_connectionBeforeAccept = null;
 			}
-			Plugin.LogSource.LogWarning("[Dynamic session] Removed Player " + (peer.PlayerId + 1) + (string.IsNullOrWhiteSpace(reason) ? " after connection disposal" : (" after " + reason)) + " (SteamId=" + DescribePeerToken(peer.PeerToken) + ", transport=" + DescribeTransport(peer.Connection) + ", clearedCatchupRoutes=" + array2.Length + "). Occupied players=" + (HostPeers.Count + 1) + "/8; the released slot can be reused.");
+			Plugin.LogSource.LogWarning("[Dynamic session] Removed Player " + (peer.PlayerId + 1) + (string.IsNullOrWhiteSpace(reason) ? " after connection disposal" : (" after " + reason)) + " (SteamId=" + DescribePeerToken(peer.PeerToken) + ", transport=" + DescribeTransport(peer.Connection) + ", clearedCatchupRoutes=" + array2.Length + "). Occupied players=" + (HostPeers.Values.Distinct().Count() + 1) + "/" + _maxPlayers + "; the released slot can be reused.");
 		}
 		try
 		{
@@ -3134,7 +3287,9 @@ internal static class RealSessionNetwork
 		}
 		WriteMember(_hostRouter, "connection", peerState.Connection);
 		WriteMember(_hostRouter, "host_hasClientConnected", true);
-		WriteMember(_hostRouter, "host_hasClientCaughtUp", true);
+		// Only claim "caught up" when the chosen peer really is; during the first join the stock code
+		// otherwise streams live updates into the joiner's catch-up.
+		WriteMember(_hostRouter, "host_hasClientCaughtUp", !peerState.CatchupPending);
 		return true;
 	}
 
@@ -3342,19 +3497,6 @@ internal static class RealSessionNetwork
 	private static void AfterMenuUpdate(object __instance)
 	{
 		_menuTearingDown = false;
-		if (AppearanceFlowSettings.DynamicSessionDisablePeerWatchdog)
-		{
-			try
-			{
-				RefreshMenu(__instance);
-				return;
-			}
-			catch (Exception exception)
-			{
-				LogFaultOnce("per-frame Open Friends refresh", exception);
-				return;
-			}
-		}
 		try
 		{
 			TickPeerWatchdog();
@@ -3419,6 +3561,9 @@ internal static class RealSessionNetwork
 			_rosterWasOpen = false;
 			_rosterFirstVisible = 0;
 			HideRosterOverlay();
+			// The hide path in TickNativeRoster is skipped once _rosterWasOpen is cleared, so tear the
+			// scrollbar down here or it stays on screen after the menu closes.
+			DestroyRosterScrollbar();
 		}
 		catch (Exception exception)
 		{
@@ -3444,6 +3589,18 @@ internal static class RealSessionNetwork
 			{
 				return true;
 			}
+			bool anyPeerLeft;
+			lock (Gate)
+			{
+				anyPeerLeft = HostPeers.Count > 0;
+			}
+			if (!anyPeerLeft)
+			{
+				// The last remote player is gone: let the game run its own Player 2 teardown so the host
+				// returns to its normal single-player state instead of keeping a frozen Player 2.
+				Plugin.LogSource.LogWarning("[Dynamic session] The last remote player left; running the stock disconnect cleanup.");
+				return true;
+			}
 			RefreshCurrentMenu();
 			Plugin.LogSource.LogWarning((ConnectedRemoteCount() > 0) ? "[Dynamic session] One peer left while other peers remain; skipped the stock global P2 teardown." : "[Dynamic session] Ignored a stale remote-disconnect callback after final peer cleanup; the host lobby remained online and ready for another invitation.");
 			return false;
@@ -3461,7 +3618,7 @@ internal static class RealSessionNetwork
 		{
 			if (IsLocalLobbyHost())
 			{
-				__result = ConnectedRemoteCount() < 7;
+				__result = ConnectedRemoteCount() < MaxRemotePlayers;
 			}
 		}
 		catch (Exception exception)
@@ -3532,7 +3689,8 @@ internal static class RealSessionNetwork
 		WriteMember(obj, "value", packetType | ((bodyNetId & 0x7FFF) << 8) | (playerId & 0xFF));
 		if (!DirectSend(connection, 60, obj, checkQueue: false))
 		{
-			throw new InvalidOperationException("Could not send " + operation + " for Player " + (playerId + 1) + ".");
+			// Report and continue: throwing here aborted the loops that notify every other peer.
+			LogFaultOnce("body-control send (" + operation + ")", new InvalidOperationException("Could not send " + operation + " for Player " + (playerId + 1) + " on " + DescribeTransport(connection) + "."));
 		}
 	}
 
@@ -3620,6 +3778,66 @@ internal static class RealSessionNetwork
 		{
 			peerState.InsideSkinSelection = true;
 			peerState.SelectionSeen = false;
+			peerState.SavedHostP2Model = null;
+			peerState.SavedHostP2Monarch = null;
+			if (peerState.PlayerId >= 2)
+			{
+				try
+				{
+					object boss = _bossInstanceProperty.GetValue(null, null);
+					object p2Model = (boss == null) ? null : ReadMember(boss, "p2Model");
+					if (p2Model != null)
+					{
+						peerState.SavedHostP2Model = p2Model;
+						peerState.SavedHostP2Monarch = ReadMember(p2Model, "monarchType");
+					}
+				}
+				catch (Exception exception)
+				{
+					LogFaultOnce("Player 2 model snapshot", exception);
+				}
+			}
+		}
+	}
+
+	private static void FinallyRecvP2SelectSkin(Exception __exception)
+	{
+		PeerState peerState = CurrentPeer();
+		if (peerState == null)
+		{
+			return;
+		}
+		if (__exception != null)
+		{
+			peerState.InsideSkinSelection = false;
+		}
+		object saved = peerState.SavedHostP2Model;
+		peerState.SavedHostP2Model = null;
+		if (saved == null)
+		{
+			return;
+		}
+		try
+		{
+			// The copy for this player's own slot was already taken inside the stock handler; put the real
+			// Player 2's ruler back so later joiners and Player 2's own body keep Player 2's monarch.
+			object boss = _bossInstanceProperty.GetValue(null, null);
+			if (boss != null && !ConnectionsEqual(ReadMember(boss, "p2Model"), saved))
+			{
+				WriteMember(boss, "p2Model", saved);
+			}
+			if (peerState.SavedHostP2Monarch != null)
+			{
+				WriteMember(saved, "monarchType", peerState.SavedHostP2Monarch);
+			}
+		}
+		catch (Exception exception)
+		{
+			LogFaultOnce("Player 2 model restore", exception);
+		}
+		finally
+		{
+			peerState.SavedHostP2Monarch = null;
 		}
 	}
 
@@ -3830,7 +4048,33 @@ internal static class RealSessionNetwork
 			Plugin.LogSource.LogError("[Dynamic session] Dropped PlayerModel with invalid PlayerId " + num + ".");
 			return false;
 		}
+		if (_insidePump)
+		{
+			PeerState sender = CurrentPeer();
+			if (sender != null && num >= 1 && num != sender.PlayerId)
+			{
+				// A client may only publish its own ruler; a wrong ID overwrote another player's look everywhere.
+				try
+				{
+					WriteMember(obj, "playerId", sender.PlayerId);
+				}
+				catch (Exception exception)
+				{
+					LogFaultOnce("PlayerModel owner correction", exception);
+					return false;
+				}
+				if (LoggedModelRelays.Add(1000 + sender.PlayerId))
+				{
+					Plugin.LogSource.LogWarning("[Dynamic session] Player " + (sender.PlayerId + 1) + " sent its ruler under PlayerId " + num + "; stored it under its own slot instead.");
+				}
+				num = sender.PlayerId;
+			}
+		}
 		SetSlot(num, obj);
+		if (_insidePump)
+		{
+			_packetCarriedModel = true;
+		}
 		if (num == 0 || num == LocalPlayerId || (num == 1 && LocalPlayerId <= 1))
 		{
 			return true;
@@ -3849,6 +4093,7 @@ internal static class RealSessionNetwork
 
 	private static void BroadcastStoredModel(int playerId, object model)
 	{
+		PeerState sender = CurrentPeer();
 		object[] array;
 		lock (Gate)
 		{
@@ -3856,8 +4101,9 @@ internal static class RealSessionNetwork
 			{
 				return;
 			}
-			array = (from peer in HostPeers.Values
-				where !peer.CatchupPending && peer.Connection != null
+			// Never echo a ruler back to the client that sent it or to the player it belongs to.
+			array = (from peer in HostPeers.Values.Distinct()
+				where !peer.CatchupPending && peer.Connection != null && peer != sender && peer.PlayerId != playerId
 				orderby peer.PlayerId
 				select peer.Connection).ToArray();
 		}
@@ -3874,7 +4120,8 @@ internal static class RealSessionNetwork
 
 	private static void TryReapplyStoredAppearance(int playerId)
 	{
-		if (_tryReapplyAppearance == null || playerId < 2)
+		// Player 2 is a clone on Player 3+ machines too; the core skips natively bound bodies itself.
+		if (_tryReapplyAppearance == null || playerId < 1)
 		{
 			return;
 		}
@@ -4121,7 +4368,7 @@ internal static class RealSessionNetwork
 	private static int FindFreePlayerId()
 	{
 		int playerId;
-		for (playerId = 1; playerId <= 7; playerId++)
+		for (playerId = 1; playerId <= MaxRemotePlayers; playerId++)
 		{
 			if (!HostPeers.Values.Any((PeerState peer) => peer.PlayerId == playerId))
 			{
@@ -4135,8 +4382,71 @@ internal static class RealSessionNetwork
 	{
 		lock (Gate)
 		{
-			return HostPeers.Count;
+			return HostPeers.Values.Distinct().Count();
 		}
+	}
+
+	// Host and client session state that must not leak into the next lobby (phantom peers used to keep
+	// receiving relays, cap invites and take player IDs; a stuck connect flag blocked later joins).
+	private static void ResetSessionState(string reason)
+	{
+		int peerCount;
+		lock (Gate)
+		{
+			peerCount = HostPeers.Values.Distinct().Count();
+			HostPeers.Clear();
+			CatchupRoutes.Clear();
+			SuppressedModelIds.Clear();
+			LoggedRelayRoutes.Clear();
+			LoggedModelRelays.Clear();
+			LoggedFaults.Clear();
+			_hostRouter = null;
+			_hostGame = null;
+			_activeCatchupConnection = null;
+			_catchupSendConnection = null;
+			_insideCatchupSend = false;
+			_receivingConnection = null;
+			_acceptingRouter = null;
+			_connectionBeforeAccept = null;
+			_acceptingPeerToken = null;
+			_insideAdditionalPeerAcceptance = false;
+			_suppressedConnectingPeerToken = null;
+			_rejectedConnectionDuringAccept = null;
+			_rejectedConnectionReason = null;
+			_isolatedPeerDispose = false;
+			_isolatedDisposeReason = null;
+			_packetPumpReadyLogged = false;
+			_lastInviteInteractable = null;
+		}
+		_clientConnectStarted = false;
+		_duplicateClientConnectLogged = false;
+		if (peerCount > 0)
+		{
+			Plugin.LogSource.LogWarning("[Dynamic session] Cleared " + peerCount + " remote peer record(s) after the local player " + reason + ".");
+		}
+	}
+
+	private static object[] ReadCommittedSlotsExcept(int excludedPlayerId)
+	{
+		List<object> list = new List<object>();
+		if (!(_slotsField.GetValue(null) is Array array))
+		{
+			return list.ToArray();
+		}
+		for (int i = 0; i < array.Length; i++)
+		{
+			object model = array.GetValue(i);
+			if (i == excludedPlayerId || model == null)
+			{
+				continue;
+			}
+			if (_isSlotCommitted != null && !Convert.ToBoolean(_isSlotCommitted.Invoke(null, new object[1] { i })))
+			{
+				continue;
+			}
+			list.Add(model);
+		}
+		return list.ToArray();
 	}
 
 	private static bool IsLocalLobbyHost()
@@ -4189,12 +4499,12 @@ internal static class RealSessionNetwork
 		object obj = ReadMember(menu, "rootNetConnectUI_OpenFriends");
 		if (obj != null)
 		{
-			bool flag = num < 7;
+			bool flag = num < MaxRemotePlayers;
 			WriteMember(obj, "interactable", flag);
 			if (!_lastInviteInteractable.HasValue || _lastInviteInteractable.Value != flag)
 			{
 				_lastInviteInteractable = flag;
-				Plugin.LogSource.LogWarning("[Dynamic session] Open Friends is " + (flag ? "enabled" : "disabled") + " at " + (num + 1) + "/" + 8 + " occupied player slots.");
+				Plugin.LogSource.LogWarning("[Dynamic session] Open Friends is " + (flag ? "enabled" : "disabled") + " at " + (num + 1) + "/" + _maxPlayers + " occupied player slots.");
 			}
 		}
 	}
@@ -4258,6 +4568,7 @@ internal static class RealSessionNetwork
 			if (flag2)
 			{
 				ResetDynamicBodies("left Steam lobby");
+				ResetSessionState("left Steam lobby");
 			}
 		}
 		if (!flag)
@@ -4274,7 +4585,8 @@ internal static class RealSessionNetwork
 		_nextRosterRefresh = timestamp + Math.Max(1L, Stopwatch.Frequency / 60);
 		object obj6 = ReadStaticMember(_menuType, "Inst");
 		bool flag3 = obj6 != null && UsesCrossfadeRoster(obj6);
-		if (!(flag3 ? (!IsNetworkingPanelOpen(obj6)) : ShouldShowRoster(obj6)) || AppearanceFlowSettings.OverlayDisableAll)
+		// The 8-slot roster only exists for a Steam lobby; offline menus and single-player pause keep the stock banners.
+		if (!flag || !(flag3 ? (!IsNetworkingPanelOpen(obj6)) : ShouldShowRoster(obj6)) || AppearanceFlowSettings.OverlayDisableAll)
 		{
 			if (!_rosterWasOpen)
 			{
@@ -4345,10 +4657,35 @@ internal static class RealSessionNetwork
 
 	private static void DestroyRosterScrollbar()
 	{
+		// The stored references are the clones' CanvasGroup components; destroying only those left the
+		// cloned banner (and a new one per show/hide) on screen.
+		DestroyUnityObject(TryReadGameObject(_scrollbarThumb));
+		DestroyUnityObject(TryReadGameObject(_scrollbarTrack));
 		DestroyUnityObject(_scrollbarThumb);
 		DestroyUnityObject(_scrollbarTrack);
 		_scrollbarThumb = null;
 		_scrollbarTrack = null;
+		foreach (object art in ScrollbarArtKeepAlive)
+		{
+			DestroyUnityObject(art);
+		}
+		ScrollbarArtKeepAlive.Clear();
+	}
+
+	private static object TryReadGameObject(object component)
+	{
+		if (component == null || !IsUnityAlive(component))
+		{
+			return null;
+		}
+		try
+		{
+			return ReadMember(component, "gameObject");
+		}
+		catch
+		{
+			return null;
+		}
 	}
 
 	private static bool ComputeRosterSpan(object menu, out float spanCenter, out float trackScaleY, out float trackCenterY)
@@ -6509,8 +6846,7 @@ internal static class RealSessionNetwork
 		}
 		try
 		{
-			MethodInfo methodInfo = (from assembly in AppDomain.CurrentDomain.GetAssemblies()
-				select assembly.GetType("UnityEngine.Object", throwOnError: false, ignoreCase: false)).FirstOrDefault((Type type) => type != null)?.GetMethods(BindingFlags.Static | BindingFlags.Public).FirstOrDefault((MethodInfo method) => method.Name == "op_Equality" && method.GetParameters().Length == 2);
+			MethodInfo methodInfo = _unityObjectEquality ?? (_unityObjectEquality = FindLoadedType("UnityEngine.Object")?.GetMethods(BindingFlags.Static | BindingFlags.Public).FirstOrDefault((MethodInfo method) => method.Name == "op_Equality" && method.GetParameters().Length == 2));
 			if (methodInfo == null)
 			{
 				return a == b;
@@ -6970,9 +7306,7 @@ internal static class RealSessionNetwork
 		}
 		try
 		{
-			Type type = (from assembly in AppDomain.CurrentDomain.GetAssemblies()
-				select assembly.GetType("UnityEngine.Object", throwOnError: false, ignoreCase: false)).FirstOrDefault((Type type2) => type2 != null);
-			MethodInfo methodInfo = ((type == null) ? null : type.GetMethods(BindingFlags.Static | BindingFlags.Public).FirstOrDefault((MethodInfo method) => method.Name == "Destroy" && method.GetParameters().Length == 1));
+			MethodInfo methodInfo = _unityObjectDestroy ?? (_unityObjectDestroy = FindLoadedType("UnityEngine.Object")?.GetMethods(BindingFlags.Static | BindingFlags.Public).FirstOrDefault((MethodInfo method) => method.Name == "Destroy" && method.GetParameters().Length == 1));
 			if (methodInfo != null)
 			{
 				methodInfo.Invoke(null, new object[1] { instance });
@@ -7295,8 +7629,24 @@ internal static class RealSessionNetwork
 
 	private static Type FindLoadedType(string fullName)
 	{
-		return (from assembly in AppDomain.CurrentDomain.GetAssemblies()
+		// Called from per-frame paths; scanning every assembly each time was a measurable frame cost.
+		lock (LoadedTypeCache)
+		{
+			if (LoadedTypeCache.TryGetValue(fullName, out Type cached))
+			{
+				return cached;
+			}
+		}
+		Type found = (from assembly in AppDomain.CurrentDomain.GetAssemblies()
 			select assembly.GetType(fullName, throwOnError: false, ignoreCase: false)).FirstOrDefault((Type type) => type != null);
+		if (found != null)
+		{
+			lock (LoadedTypeCache)
+			{
+				LoadedTypeCache[fullName] = found;
+			}
+		}
+		return found;
 	}
 
 	private static bool SteamIdsEqual(object first, object second)
@@ -7529,14 +7879,35 @@ internal static class RealSessionNetwork
 			return null;
 		}
 		Type type = instance.GetType();
+		MemberInfo cached;
+		lock (ReadMemberCache)
+		{
+			ReadMemberCache.TryGetValue((type, name), out cached);
+		}
+		if (cached is PropertyInfo cachedProperty)
+		{
+			return cachedProperty.GetValue(instance, null);
+		}
+		if (cached is FieldInfo cachedField)
+		{
+			return cachedField.GetValue(instance);
+		}
 		PropertyInfo property = type.GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 		if (property != null && property.CanRead)
 		{
+			lock (ReadMemberCache)
+			{
+				ReadMemberCache[(type, name)] = property;
+			}
 			return property.GetValue(instance, null);
 		}
 		FieldInfo field = type.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 		if (field != null)
 		{
+			lock (ReadMemberCache)
+			{
+				ReadMemberCache[(type, name)] = field;
+			}
 			return field.GetValue(instance);
 		}
 		throw new MissingMemberException(type.FullName, name);
@@ -7568,15 +7939,33 @@ internal static class RealSessionNetwork
 			throw new ArgumentNullException("instance");
 		}
 		Type type = instance.GetType();
+		MemberInfo cached;
+		lock (WriteMemberCache)
+		{
+			WriteMemberCache.TryGetValue((type, name), out cached);
+		}
+		if (cached != null)
+		{
+			SetReflectedValue(instance, cached, value);
+			return;
+		}
 		PropertyInfo property = type.GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 		if (property != null && property.CanWrite)
 		{
+			lock (WriteMemberCache)
+			{
+				WriteMemberCache[(type, name)] = property;
+			}
 			SetReflectedValue(instance, property, value);
 			return;
 		}
 		FieldInfo field = type.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 		if (field != null)
 		{
+			lock (WriteMemberCache)
+			{
+				WriteMemberCache[(type, name)] = field;
+			}
 			SetReflectedValue(instance, field, value);
 			return;
 		}
@@ -7588,6 +7977,17 @@ internal static class RealSessionNetwork
 		PropertyInfo propertyInfo = member as PropertyInfo;
 		FieldInfo fieldInfo = member as FieldInfo;
 		Type targetType = ((propertyInfo != null) ? propertyInfo.PropertyType : fieldInfo.FieldType);
+		if (value != null && !targetType.IsInstanceOfType(value))
+		{
+			// Convert up front (e.g. float -> int font sizes) instead of paying for an ArgumentException per write.
+			try
+			{
+				value = ConvertValue(value, targetType);
+			}
+			catch
+			{
+			}
+		}
 		try
 		{
 			if (propertyInfo != null)
@@ -7685,14 +8085,17 @@ internal static class RealSessionNetwork
 
 	private static void LogFaultOnce(string operation, Exception exception)
 	{
+		// Key on the fault type too, so a different failure in the same callback is still reported.
+		Exception ex = Unwrap(exception);
+		string key = operation + "|" + ex.GetType().FullName + "|" + ((ex.Message != null && ex.Message.Length > 80) ? ex.Message.Substring(0, 80) : ex.Message);
 		lock (Gate)
 		{
-			if (!LoggedFaults.Add(operation))
+			if (LoggedFaults.Count > 512 || !LoggedFaults.Add(key))
 			{
 				return;
 			}
 		}
-		Plugin.LogSource.LogError("[Dynamic session] " + operation + " failed once and has been contained; this callback will not emit a repeating exception loop. Details: " + Unwrap(exception));
+		Plugin.LogSource.LogError("[Dynamic session] " + operation + " failed and has been contained; this fault will not emit a repeating exception loop. Details: " + ex);
 	}
 
 	private static Type RequireGameType(string name)
@@ -7822,11 +8225,25 @@ internal static class RealSessionNetwork
 		return new string((value ?? string.Empty).Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
 	}
 
-	private static void Patch(Harmony harmony, MethodInfo original, string prefixName, string postfixName)
+	private static void Patch(Harmony harmony, MethodInfo original, string prefixName, string postfixName, string finalizerName = null)
 	{
 		HarmonyMethod prefix = ((prefixName == null) ? null : new HarmonyMethod(FindPatch(prefixName)));
 		HarmonyMethod postfix = ((postfixName == null) ? null : new HarmonyMethod(FindPatch(postfixName)));
-		harmony.Patch(original, prefix, postfix);
+		HarmonyMethod finalizer = ((finalizerName == null) ? null : new HarmonyMethod(FindPatch(finalizerName)));
+		harmony.Patch(original, prefix, postfix, null, finalizer, null);
+	}
+
+	internal static int ReadCoreMaxPlayers()
+	{
+		try
+		{
+			object value = RequireCoreType("KingdomEightCrowns.Plugin").GetProperty("MaxPlayers", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)?.GetValue(null, null);
+			return (value == null) ? 8 : Math.Clamp(Convert.ToInt32(value), 2, 8);
+		}
+		catch
+		{
+			return 8;
+		}
 	}
 
 	private static bool TryPatchCapability(Harmony harmony, string capability, Func<MethodInfo> resolveOriginal, string prefixName, string postfixName)
@@ -7880,7 +8297,7 @@ internal static class RealSessionNetwork
 
 	private static void TickPeerWatchdog()
 	{
-		if (!IsLocalLobbyHost())
+		if (AppearanceFlowSettings.DynamicSessionDisablePeerWatchdog || !IsLocalLobbyHost())
 		{
 			return;
 		}
@@ -7926,9 +8343,11 @@ internal static class RealSessionNetwork
 			return null;
 		}
 		double num = ElapsedSeconds(peer.AcceptedAt, now);
-		if (num >= 300.0)
+		// The idle rule below catches dead joins; the total cap only has to survive a slow ruler pick
+		// plus a long world load.
+		if (num >= 900.0)
 		{
-			return "native initialization exceeded " + 300 + " seconds";
+			return "native initialization exceeded " + 900 + " seconds";
 		}
 		if (peer.ReceivedPackets == 0 && num >= 60.0)
 		{

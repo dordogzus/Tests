@@ -7,7 +7,7 @@ using HarmonyLib;
 
 namespace KingdomEightCrowns.AppearanceFlow;
 
-[BepInPlugin("openai.kingdomtwocrowns.eightcrowns.appearanceflow", "Kingdom Eight Crowns - Appearance Flow", "0.14.20-alpha")]
+[BepInPlugin("openai.kingdomtwocrowns.eightcrowns.appearanceflow", "Kingdom Eight Crowns - Appearance Flow", "0.14.21-alpha")]
 [BepInDependency("openai.kingdomtwocrowns.eightcrowns", BepInDependency.DependencyFlags.HardDependency)]
 [BepInProcess("KingdomTwoCrowns.exe")]
 public sealed class Plugin : BasePlugin
@@ -16,7 +16,7 @@ public sealed class Plugin : BasePlugin
 
 	public const string PluginName = "Kingdom Eight Crowns - Appearance Flow";
 
-	public const string PluginVersion = "0.14.20-alpha";
+	public const string PluginVersion = "0.14.21-alpha";
 
 	private Harmony _safetyHarmony;
 
@@ -29,7 +29,7 @@ public sealed class Plugin : BasePlugin
 	public override void Load()
 	{
 		LogSource = base.Log;
-		LogSource.LogInfo("Kingdom Eight Crowns - Appearance Flow 0.14.20-alpha loading.");
+		LogSource.LogInfo("Kingdom Eight Crowns - Appearance Flow " + PluginVersion + " loading.");
 		_safetyHarmony = new Harmony("openai.kingdomtwocrowns.eightcrowns.appearanceflow.safety");
 		try
 		{
@@ -49,6 +49,13 @@ public sealed class Plugin : BasePlugin
 			{
 				NativeCampaignAppearance.Install(_modeHarmony);
 				LogSource.LogWarning("[Appearance flow] OnePcNativeSequence=true. The verified eight-screen native selector diagnostic is enabled.");
+				return;
+			}
+			int maxPlayers = RealSessionNetwork.ReadCoreMaxPlayers();
+			if (maxPlayers <= 2)
+			{
+				// MaxPlayers=2 is the documented parity mode: leave every transport and lobby path stock.
+				LogSource.LogWarning("[Appearance flow] MaxPlayers=2 (two-player parity mode): the multi-peer session layer was not installed; networking and the Steam lobby stay game-native.");
 				return;
 			}
 			RealSessionNetwork.Install(_modeHarmony);
