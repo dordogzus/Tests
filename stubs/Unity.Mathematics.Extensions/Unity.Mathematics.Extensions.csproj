@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>Unity.Mathematics.Extensions</AssemblyName>
+    <AssemblyVersion>0.0.0.0</AssemblyVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Unity.Mathematics\Unity.Mathematics.csproj" />
+  </ItemGroup>
+</Project>

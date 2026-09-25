@@ -5,7 +5,7 @@ cd /d "%~dp0"
 if "%~1"=="" (
   echo.
   echo ============================================================
-  echo   More Players v2.20.6 - Drag and Drop Installer
+  echo   More Players v3.0.0 - Drag and Drop Installer
   echo ============================================================
   echo.
   echo Drag one of these onto this BAT file:

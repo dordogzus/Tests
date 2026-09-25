@@ -1,0 +1,24 @@
+<Project>
+  <!--
+    Compile-only reference stubs for the game's Il2CppInterop assemblies.
+    They are NEVER shipped: at runtime BepInEx supplies the real interop
+    assemblies generated from the player's own game install. Every member
+    here mirrors a signature the v2.20.6 build (compiled against the real
+    interop) referenced, or that was checked against real game-build interop.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <Deterministic>true</Deterministic>
+    <IsPackable>false</IsPackable>
+    <DebugType>none</DebugType>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <NoWarn>$(NoWarn);CS0108;CS0114;CS0660;CS0661;CS0169;CS0649;CS8981;CS1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Il2CppInterop.Runtime" Version="1.5.3" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

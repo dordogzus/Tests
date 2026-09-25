@@ -15,10 +15,14 @@ internal static class Patch_CoreStart
     {
         try { ExtendedTransformStore.ResetSession(); } catch { }
         try { Zone.ResetSession(); } catch { }
+        try { FrontierRuntime.ResetSession(); } catch { }
+        try { PlayerColors.ResetSession(); } catch { }
     }
 
     static void Postfix()
     {
+        try { Contracts.OnCoreStart(); } catch { }
+        try { PlayerColors.EnsureExtended(); } catch { }
     }
 }
 
@@ -49,14 +53,9 @@ internal static class Patch_ObjectiveComplete
     }
 }
 
-[HarmonyPatch(typeof(Core.Singleton), nameof(Core.Singleton.GetMaxAvailableComponents))]
-internal static class Patch_MaxAvailable
-{
-    static void Postfix(SCPrefab scPrefab, ref int __result)
-    {
-        try { __result = CrewParts.ApplyBonus(scPrefab, __result); } catch { }
-    }
-}
+// Core.Singleton.GetMaxAvailableComponents is intentionally not patched: CrewParts
+// writes its grants into the prefabs' _availableAmount, so a budget postfix
+// would count every grant twice.
 
 [HarmonyPatch(typeof(UIInventory), nameof(UIInventory.RefreshItems))]
 internal static class Patch_GarageDiag
@@ -146,37 +145,8 @@ internal static class Patch_Tick
     }
 }
 
-[HarmonyPatch(typeof(Core.DiskWorldSave), nameof(Core.DiskWorldSave.SaveToFile))]
-internal static class Patch_WorldSaveWatch
-{
-    static void Postfix()
-    {
-        try { SaveWatch.OnWorldSave(); } catch { }
-    }
-}
-
-[HarmonyPatch(typeof(Core.GameData), nameof(Core.GameData.SaveToFile))]
-internal static class Patch_GameSaveWatch
-{
-    static void Postfix()
-    {
-        try { SaveWatch.OnGameSave(); } catch { }
-    }
-}
-
-/// <summary>
-/// Authoritative live-garage expansion. We modify the arguments before the
-/// game's own SetRootMatrix so its inverse/rotation/bounds users all see one
-/// coherent centered coordinate system.
-/// </summary>
-[HarmonyPatch(typeof(GarageGrabberSingleton), nameof(GarageGrabberSingleton.SetRootMatrix))]
-internal static class Patch_GarageRootMatrix
-{
-    static void Prefix(ref Unity.Mathematics.double4x4 matrix, ref Unity.Mathematics.float3 boundsSize)
-    {
-        try { Zone.AdjustRootMatrix(ref matrix, ref boundsSize); } catch { }
-    }
-}
+// The garage root matrix is widened by Zone.ApplyRootAtRuntime (tick + garage UI
+// refresh) instead of patching the value-type method GarageGrabberSingleton.SetRootMatrix.
 
 [HarmonyPatch(typeof(GarageGrabber), nameof(GarageGrabber.DoBeforeStop))]
 internal static class Patch_GarageBeforeStop

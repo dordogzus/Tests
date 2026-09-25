@@ -104,7 +104,7 @@ internal static class CrewParts
         }
     }
 
-    internal static void AddPackBonus(string className, int amount)
+    internal static void AddPackBonus(string className, int amount, bool quiet = false)
     {
         try
         {
@@ -114,7 +114,7 @@ internal static class CrewParts
             EnsureSets();
             s_bonus[className] += amount;
             ApplyBudgetDelta(className, amount);
-            Log.LogInfo($"CrewParts: {className} pack -> class total +{s_bonus[className]}.");
+            if (!quiet) Log.LogInfo($"CrewParts: {className} pack -> class total +{s_bonus[className]}.");
         }
         catch (Exception e)
         {
@@ -304,7 +304,7 @@ internal static class CrewParts
             {
                 try
                 {
-                    if (epc == null) continue;
+                    if (epc == null || FrontierBlocks.IsFrontier(epc)) continue; // Frontier stock is tier-gated separately
                     string name = null;
                     try { name = epc.GetName(); } catch { }
                     if (string.IsNullOrEmpty(name)) continue;
@@ -388,8 +388,35 @@ internal static class CrewParts
         return list.ToArray();
     }
 
+    private static bool _refreshPending;
+    private static float _nextRefreshAt;
+
+    internal static void RequestRefresh() => _refreshPending = true;
+
+    /// <summary>
+    /// The garage validates placement against availability maps that the game rebuilds in
+    /// Core.RefreshSharedAvailableComponents; ask for one rebuild after our budgets change,
+    /// only in build mode (the call is unsafe during early startup).
+    /// </summary>
+    internal static void TickRefresh()
+    {
+        if (!_refreshPending || !ExtendedTransformStore.GarageBuildMode) return;
+        float now = UnityEngine.Time.realtimeSinceStartup;
+        if (now < _nextRefreshAt) return;
+        _nextRefreshAt = now + 2f;
+        _refreshPending = false;
+        try
+        {
+            var core = Core.Get();
+            var m = core != null ? HarmonyLib.AccessTools.Method(core.GetType(), "RefreshSharedAvailableComponents") : null;
+            if (m != null && m.GetParameters().Length == 0) m.Invoke(core, null);
+        }
+        catch (Exception e) { Log.LogDebug($"Availability refresh skipped: {e.Message}"); }
+    }
+
     private static void Refresh()
     {
+        _refreshPending = true;
         // v2.17: do not force Core.RefreshStandaloneAvailableComponents here.
         // During early startup the game object graph is incomplete and this
         // native call throws NullReferenceException. GetMaxAvailableComponents
@@ -415,7 +442,6 @@ internal static class CrewParts
                 _announced = true;
                 try { Contracts.AnnounceCurrent(); } catch { }
             }
-            try { ShipWatch.Snapshot(); } catch { }
             try { if (!Zone.Done) Zone.EnsureScaled(); } catch { }
             try { Zone.LogYardState(); } catch { }
             var items = inv._allListItems;

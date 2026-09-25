@@ -44,10 +44,21 @@ internal static class CustomMissions
 
     internal static bool IsOurs(uint id) => id == IdSeats || id == IdGrid || id == IdFrames;
 
+    internal static bool IsPackage(string objectiveIdName) =>
+        !string.IsNullOrEmpty(objectiveIdName) && objectiveIdName.StartsWith("Package_", StringComparison.Ordinal);
+
+    /// <summary>Grants the packs for one delivery without messages (used to rebuild progress from the save).</summary>
+    internal static void GrantSilently(string objectiveIdName, int crewSize)
+    {
+        if (!IsPackage(objectiveIdName)) return;
+        foreach (var p in Logic.CrewProgression.Packs(Logic.CrewProgression.RouteFor(objectiveIdName), crewSize))
+            CrewParts.AddPackBonus(p.Key, p.Value, quiet: true);
+    }
+
     // Which vanilla package deliveries advance which custom mission.
     // Matched on the vanilla objective's ID name (Package_Moon_*, etc.).
     // NOTHING else grants packs: no random vanilla handouts, ever.
-    internal static bool TryCompleteFromVanilla(ObjectiveSetup vanilla, out string missionTitle, out string grantedText)
+    internal static bool TryCompleteFromVanilla(ObjectiveSetup vanilla, int crewSize, out string missionTitle, out string grantedText)
     {
         missionTitle = null;
         grantedText = null;
@@ -56,43 +67,14 @@ internal static class CustomMissions
             if (vanilla == null) return false;
             string oidName = null;
             try { oidName = vanilla._objectiveID.ToString(); } catch { return false; }
-            if (string.IsNullOrEmpty(oidName) || !oidName.StartsWith("Package_")) return false;
+            if (!IsPackage(oidName)) return false;
 
-            uint mission;
-            KeyValuePair<string, int>[] packs;
-            if (oidName.StartsWith("Package_Moon_"))
-            {
-                mission = IdSeats;
-                packs = new KeyValuePair<string, int>[]
-                {
-                    new KeyValuePair<string, int>("Seats", 4),
-                    new KeyValuePair<string, int>("Consoles", 2),
-                    new KeyValuePair<string, int>("Sensors", 1),
-                };
-            }
-            else if (oidName.StartsWith("Package_Earth_"))
-            {
-                mission = IdGrid;
-                packs = new KeyValuePair<string, int>[]
-                {
-                    new KeyValuePair<string, int>("Consoles", 4),
-                    new KeyValuePair<string, int>("Power", 4),
-                    new KeyValuePair<string, int>("Sensors", 2),
-                };
-            }
-            else
-            {
-                mission = IdFrames;
-                packs = new KeyValuePair<string, int>[]
-                {
-                    new KeyValuePair<string, int>("Frames", 8),
-                    new KeyValuePair<string, int>("Glass", 4),
-                    new KeyValuePair<string, int>("Thrusters", 2),
-                    new KeyValuePair<string, int>("Power", 2),
-                };
-            }
+            var route = Logic.CrewProgression.RouteFor(oidName);
+            uint mission = route == Logic.SupplyRoute.Moon ? IdSeats : route == Logic.SupplyRoute.Earth ? IdGrid : IdFrames;
+            var packs = Logic.CrewProgression.Packs(route, crewSize);
 
             var bits = new List<string>();
+            // Packs scale with the crew: x1 up to 4 players, x6 for a full 24-player lobby.
             foreach (var p in packs)
             {
                 try
@@ -269,9 +251,9 @@ internal static class CustomMissions
         var out_ = new List<(string title, string loot)>();
         try
         {
-            out_.Add(("CREW: Moon Seats Run", "Seats +4, Consoles +2, Sensors +1"));
-            out_.Add(("CREW: Earth Grid Build", "Consoles +4, Power +4, Sensors +2"));
-            out_.Add(("CREW: Outer Rim Frames", "Frames +8, Glass +4, Thrusters +2, Power +2"));
+            out_.Add(("CREW: Moon Seats Run", "Seats +4, Consoles +2, Sensors +1 (per 4 crew)"));
+            out_.Add(("CREW: Earth Grid Build", "Consoles +4, Power +4, Sensors +2 (per 4 crew)"));
+            out_.Add(("CREW: Outer Rim Frames", "Frames +8, Glass +4, Thrusters +2, Power +2, Seats +1 (scaled)"));
         }
         catch { }
         return out_;
@@ -289,7 +271,7 @@ internal static class CustomMissions
             if (id == IdSeats)
             {
                 if (kind == "objective") return "Deliver Moon packages to Headquarters";
-                if (kind == "desc") return "Haul any package found on the Moon back to Earth Headquarters. Crew reward: +4 Seats pack, straight into the garage.";
+                if (kind == "desc") return "Haul any package found on the Moon back to Earth Headquarters. Crew reward: a Seats pack sized for your crew (4 seats per 4 players), straight into the garage.";
                 if (kind == "hints") return "Package markers are on the map. More seats for more crew.";
             }
             else if (id == IdGrid)

@@ -1,0 +1,36 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{6CAD3FFB-9920-4953-9AD0-3776888AAF70}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MorePlayersMod", "src\MorePlayersMod\MorePlayersMod.csproj", "{889B0ECD-8936-4D03-9A12-DB70A2E2E798}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{DC2191D8-0359-4423-9D2A-F55B21C6A458}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MorePlayersMod.Tests", "tests\MorePlayersMod.Tests\MorePlayersMod.Tests.csproj", "{7EBF6938-C76F-4788-851A-CB6C53E415F2}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{889B0ECD-8936-4D03-9A12-DB70A2E2E798}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{889B0ECD-8936-4D03-9A12-DB70A2E2E798}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{889B0ECD-8936-4D03-9A12-DB70A2E2E798}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{889B0ECD-8936-4D03-9A12-DB70A2E2E798}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7EBF6938-C76F-4788-851A-CB6C53E415F2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7EBF6938-C76F-4788-851A-CB6C53E415F2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7EBF6938-C76F-4788-851A-CB6C53E415F2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7EBF6938-C76F-4788-851A-CB6C53E415F2}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{889B0ECD-8936-4D03-9A12-DB70A2E2E798} = {6CAD3FFB-9920-4953-9AD0-3776888AAF70}
+		{7EBF6938-C76F-4788-851A-CB6C53E415F2} = {DC2191D8-0359-4423-9D2A-F55B21C6A458}
+	EndGlobalSection
+EndGlobal
